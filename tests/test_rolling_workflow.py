@@ -158,6 +158,83 @@ def test_rh_only_workflow_aggregates(monkeypatch: pytest.MonkeyPatch, simple_con
     assert costs["grid.Dump_cost_rate_EUR_MWh"] == pytest.approx(1.5)
 
 
+def test_rh_costs_include_grid_adders_and_demand_charge(
+    monkeypatch: pytest.MonkeyPatch, simple_config: dict
+) -> None:
+    config = copy.deepcopy(simple_config)
+    config["costs"]["include_gridcost_in_energy"] = True
+    config["grid"].update(
+        {
+            "energy_fee_eur_mwh": 5.0,
+            "gridcost_eur_mwh": 5.0,
+            "demand_charge_eur_per_mw_y": 100.0,
+            "year_fraction": 0.25,
+            "include_demand_charge_in_rh": True,
+        }
+    )
+    config["scenario"] = {
+        "workflow": ["RH"],
+        "rolling_horizon": {"HEAT_HORIZON_HOURS": 4.0, "STEP_HOURS": 2.0, "terminal_policy": "free"},
+    }
+
+    index = [datetime(2023, 1, 1) + timedelta(hours=i) for i in range(4)]
+    data = {
+        "waermebedarf_MWth": [20.0, 21.0, 22.0, 23.0],
+        "strompreis_EUR_MWh": [50.0, 50.0, 50.0, 50.0],
+        "grid_co2_kg_MWh": [0.0, 0.0, 0.0, 0.0],
+    }
+    table = TimeSeriesTable(index, list(data.keys()), data)
+
+    monkeypatch.setattr(rh, "load_input_excel", lambda *args, **kwargs: table)
+
+    window_series = [
+        OrderedDict(
+            {
+                "TES_SOC_MWh": [0.0, 1.0, 1.0, 1.0],
+                "P_buy_MW": [2.0, 2.0, 0.0, 0.0],
+                "P_sell_MW": [0.0, 0.0, 0.0, 0.0],
+                "Q_dump_MWth": [0.0, 0.0, 0.0, 0.0],
+            }
+        ),
+        OrderedDict(
+            {
+                "TES_SOC_MWh": [1.0, 1.0, 1.0, 1.0],
+                "P_buy_MW": [0.0, 3.0, 0.0, 0.0],
+                "P_sell_MW": [0.0, 0.0, 0.0, 0.0],
+                "Q_dump_MWth": [0.0, 0.0, 0.0, 0.0],
+            }
+        ),
+    ]
+
+    expected_soc = [0.0, 1.0]
+    call_state = {"idx": 0}
+
+    def fake_solve(table_arg, cfg, dt_h, solver_name):
+        idx = call_state["idx"]
+        call_state["idx"] += 1
+        assert cfg["inputs"]["SOC_init"] == pytest.approx(expected_soc[idx])
+        series = window_series[idx]
+        summary = OrderedDict({"objective": OrderedDict()})
+        costs = {"objective.OBJ_value_EUR": float(idx)}
+        solver = {"status": "ok"}
+        return rh.ScenarioResult(table_arg, series, summary, costs, solver)
+
+    monkeypatch.setattr(rh, "_solve_scenario", fake_solve)
+
+    result = rh.run_workflow([], overrides=config)
+
+    assert result.rh_result is not None
+    costs = result.rh_result.costs
+
+    assert costs["objective.Grid_energy_cost_EUR"] == pytest.approx(420.0)
+    assert costs["objective.Grid_net_cost_EUR"] == pytest.approx(420.0)
+    assert costs["objective.Demand_charge_cost_EUR"] == pytest.approx(75.0)
+    assert costs["objective.P_buy_peak_MW"] == pytest.approx(3.0)
+    assert costs["objective.OBJ_value_EUR"] == pytest.approx(495.0)
+    assert costs["grid.Energy_from_grid_MWh"] == pytest.approx(7.0)
+    assert costs["grid.Average_purchase_price_EUR_MWh"] == pytest.approx(60.0)
+
+
 def test_pf_then_rh_fix_design(monkeypatch: pytest.MonkeyPatch, simple_config: dict) -> None:
     config = copy.deepcopy(simple_config)
     config["scenario"] = {
