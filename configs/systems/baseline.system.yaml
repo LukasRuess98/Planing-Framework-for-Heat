@@ -6,18 +6,33 @@ system:
       max_th_mw: 40.0
       min_th_mw: 5.0
       wrg_source_column: WRG1_T_K
+      wrg_capacity_column: WRG1_Q_cap
+      investment:
+        enabled: false
+        capacity_min_mw: 40.0
+        capacity_max_mw: 40.0
     - id: HP2
       enabled: true
       type: standard
       max_th_mw: 40.0
       min_th_mw: 5.0
       wrg_source_column: WRG2_T_K
+      wrg_capacity_column: WRG2_Q_cap
+      investment:
+        enabled: false
+        capacity_min_mw: 40.0
+        capacity_max_mw: 40.0
     - id: HP3
       enabled: true
       type: standard
       max_th_mw: 40.0
       min_th_mw: 5.0
       wrg_source_column: WRG3_T_K
+      wrg_capacity_column: WRG3_Q_cap
+      investment:
+        enabled: false
+        capacity_min_mw: 40.0
+        capacity_max_mw: 40.0
 
   storage:
     enabled: true
@@ -25,6 +40,12 @@ system:
     max_energy_mwh: 100.0
     max_power_mw: 30.0
     soc0_mwh: 0.0
+    investment:
+      enabled: false
+      energy_capacity_min_mwh: 100.0
+      energy_capacity_max_mwh: 100.0
+      power_capacity_min_mw: 30.0
+      power_capacity_max_mw: 30.0
 
   generators:
     hkw:

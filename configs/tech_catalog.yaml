@@ -42,8 +42,29 @@ heat_pumps:
     sink_defaults:
       Tsink_out_K: 363.15
       Tsink_in_K: 343.15
+  investment_defaults:
+    enabled: false
+    capacity_min_mw: 0.0
+    capacity_max_mw: 0.0
+    capex_eur_per_mw: 0.0
+    activation_cost_eur: 0.0
+    lifetime_years: 20.0
+    tie_breaker_eur_per_mw: 0.0
   types:
     standard:
       eta: 0.75
       FQ: 0.10
       min_load: 0.30
+
+storage:
+  investment_defaults:
+    enabled: false
+    energy_capacity_min_mwh: 0.0
+    energy_capacity_max_mwh: 0.0
+    power_capacity_min_mw: 0.0
+    power_capacity_max_mw: 0.0
+    energy_capex_eur_per_mwh: 0.0
+    power_capex_eur_per_mw: 0.0
+    activation_cost_eur: 0.0
+    lifetime_years: 20.0
+    tie_breaker_eur_per_mwh: 0.0

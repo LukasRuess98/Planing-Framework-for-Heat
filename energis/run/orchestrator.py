@@ -94,19 +94,72 @@ def _gather_component_metadata(cfg: Dict[str, Any]) -> Dict[str, Any]:
     for hp in syscfg.get("heat_pumps", []):
         if not hp.get("enabled", True):
             continue
+        inv_cfg = hp.get("investment", {})
+        cap_min = float(inv_cfg.get("capacity_min_mw", hp.get("min_th_mw", 0.0)))
+        cap_max = float(inv_cfg.get("capacity_max_mw", hp.get("max_th_mw", 0.0)))
+        if inv_cfg.get("enabled", False):
+            cap_init = float(
+                inv_cfg.get(
+                    "initial_capacity_mw",
+                    max(cap_min, min(cap_max, hp.get("max_th_mw", cap_max))),
+                )
+            )
+        else:
+            cap_init = float(hp.get("max_th_mw", cap_max))
         meta["heat_pumps"].append(
             {
                 "id": str(hp.get("id", "HP")),
                 "max_th": float(hp.get("max_th_mw", 0.0)),
+                "invest_enabled": bool(inv_cfg.get("enabled", False)),
+                "cap_min": cap_min,
+                "cap_max": cap_max,
+                "cap_init": cap_init,
             }
         )
 
     sto_cfg = syscfg.get("storage", {})
     if sto_cfg.get("enabled", False):
+        inv_cfg = sto_cfg.get("investment", {})
+        e_cap_min = float(
+            inv_cfg.get("energy_capacity_min_mwh", sto_cfg.get("min_energy_mwh", 0.0))
+        )
+        e_cap_max = float(
+            inv_cfg.get("energy_capacity_max_mwh", sto_cfg.get("max_energy_mwh", 0.0))
+        )
+        p_cap_min = float(
+            inv_cfg.get("power_capacity_min_mw", sto_cfg.get("min_power_mw", 0.0))
+        )
+        p_cap_max = float(
+            inv_cfg.get("power_capacity_max_mw", sto_cfg.get("max_power_mw", 0.0))
+        )
+        if inv_cfg.get("enabled", False):
+            e_cap_init = float(
+                inv_cfg.get(
+                    "initial_energy_capacity_mwh",
+                    max(e_cap_min, min(e_cap_max, sto_cfg.get("max_energy_mwh", e_cap_max))),
+                )
+            )
+            p_cap_init = float(
+                inv_cfg.get(
+                    "initial_power_capacity_mw",
+                    max(p_cap_min, min(p_cap_max, sto_cfg.get("max_power_mw", p_cap_max))),
+                )
+            )
+        else:
+            e_cap_init = float(sto_cfg.get("max_energy_mwh", e_cap_max))
+            p_cap_init = float(sto_cfg.get("max_power_mw", p_cap_max))
+
         meta["storage"] = {
             "name": sto_cfg.get("id", "TES") or "TES",
             "e_max": float(sto_cfg.get("max_energy_mwh", 0.0)),
             "p_max": float(sto_cfg.get("max_power_mw", 0.0)),
+            "invest_enabled": bool(inv_cfg.get("enabled", False)),
+            "e_cap_min": e_cap_min,
+            "e_cap_max": e_cap_max,
+            "p_cap_min": p_cap_min,
+            "p_cap_max": p_cap_max,
+            "e_cap_init": e_cap_init,
+            "p_cap_init": p_cap_init,
         }
 
     fuels = cfg.get("fuels", {})
@@ -199,6 +252,9 @@ def _collect_timeseries_and_summary(
             ("CO2_price_EUR_per_t", float(cfg.get("costs", {}).get("co2_price_eur_per_t", 0.0))),
             ("Include_CO2_in_objective", bool(cfg.get("costs", {}).get("include_co2_cost_in_objective", True))),
             ("Demand_charge_cost_EUR", 0.0),
+            ("Capex_cost_EUR", 0.0),
+            ("Activation_cost_EUR", 0.0),
+            ("Tie_breaker_cost_EUR", 0.0),
             ("Period_fraction_of_year", float(n * dt_h / 8760.0) if n else 0.0),
             ("Objective_residual_EUR", 0.0),
         ]
@@ -234,6 +290,8 @@ def _collect_timeseries_and_summary(
                 ("Max_SOC_MWh", 0.0),
                 ("Capacity_MWh", meta["storage"]["e_max"]),
                 ("Power_limit_MW", meta["storage"]["p_max"]),
+                ("Build_binary", 0.0),
+                ("Investment_enabled", bool(meta["storage"].get("invest_enabled", False))),
             ]
         )
         summary_sections[storage_key] = storage_section
@@ -314,6 +372,29 @@ def _collect_timeseries_and_summary(
 
     fuel_cost_total = 0.0
     fuel_emissions_t = 0.0
+    capex_cost = 0.0
+    activation_cost = 0.0
+    tie_break_cost = 0.0
+
+    if model is not None and HAVE_PYOMO:
+        capex_expr = getattr(model, "capex_cost_expr", None)
+        activation_expr = getattr(model, "activation_cost_expr", None)
+        tie_expr = getattr(model, "tie_break_cost_expr", None)
+        if capex_expr is not None:
+            try:
+                capex_cost = float(pyo.value(capex_expr))
+            except Exception:  # pragma: no cover - defensive
+                capex_cost = 0.0
+        if activation_expr is not None:
+            try:
+                activation_cost = float(pyo.value(activation_expr))
+            except Exception:  # pragma: no cover - defensive
+                activation_cost = 0.0
+        if tie_expr is not None:
+            try:
+                tie_break_cost = float(pyo.value(tie_expr))
+            except Exception:  # pragma: no cover - defensive
+                tie_break_cost = 0.0
 
     for hp in meta["heat_pumps"]:
         comp = hp["id"]
@@ -323,14 +404,35 @@ def _collect_timeseries_and_summary(
         heat_mwh = float(sum(heat_series) * dt_h)
         pel_mwh = float(sum(pel_series) * dt_h)
         on_hours = float(sum(on_series) * dt_h)
-        full_load = float((heat_mwh / hp["max_th"]) if hp["max_th"] > 0 else 0.0)
+        cap_value = float(hp.get("cap_init", hp["max_th"]))
+        build_value = 1.0 if cap_value > 0 else 0.0
+        if model is not None and HAVE_PYOMO:
+            cap_var = getattr(model, f"{comp}_cap_mw", None)
+            build_var = getattr(model, f"{comp}_build", None)
+            if cap_var is not None:
+                try:
+                    cap_value = float(pyo.value(cap_var))
+                except Exception:  # pragma: no cover - defensive
+                    cap_value = float(hp.get("cap_init", hp["max_th"]))
+            if build_var is not None:
+                try:
+                    build_value = float(pyo.value(build_var))
+                except Exception:  # pragma: no cover - defensive
+                    build_value = 1.0 if cap_value > 0 else 0.0
+        full_load = float((heat_mwh / cap_value) if cap_value > 1e-9 else 0.0)
         heat_pump_sections[f"heat_pump_{comp}"] = OrderedDict(
             [
                 ("Heat_output_MWh", heat_mwh),
                 ("Electricity_input_MWh", pel_mwh),
                 ("Operating_hours_h", on_hours),
                 ("Full_load_hours_h", full_load),
-                ("Thermal_capacity_MW", hp["max_th"]),
+                ("Thermal_capacity_MW", cap_value),
+                ("Build_binary", build_value),
+                ("Investment_enabled", bool(hp.get("invest_enabled", False))),
+                (
+                    "Capacity_bounds_MW",
+                    [hp.get("cap_min", 0.0), hp.get("cap_max", hp.get("max_th", cap_value))],
+                ),
             ]
         )
 
@@ -380,11 +482,44 @@ def _collect_timeseries_and_summary(
         charge_series = series["TES_charge_MW"]
         discharge_series = series["TES_discharge_MW"]
         soc_series = series["TES_SOC_MWh"]
+        energy_cap = float(meta["storage"].get("e_cap_init", meta["storage"]["e_max"]))
+        power_cap = float(meta["storage"].get("p_cap_init", meta["storage"]["p_max"]))
+        build_val = 1.0 if energy_cap > 0 else 0.0
+        if model is not None and HAVE_PYOMO:
+            cap_e_var = getattr(model, "TES_cap_energy", None)
+            cap_p_var = getattr(model, "TES_cap_power", None)
+            build_var = getattr(model, "TES_build", None)
+            if cap_e_var is not None:
+                try:
+                    energy_cap = float(pyo.value(cap_e_var))
+                except Exception:  # pragma: no cover - defensive
+                    energy_cap = float(meta["storage"].get("e_cap_init", meta["storage"]["e_max"]))
+            if cap_p_var is not None:
+                try:
+                    power_cap = float(pyo.value(cap_p_var))
+                except Exception:  # pragma: no cover - defensive
+                    power_cap = float(meta["storage"].get("p_cap_init", meta["storage"]["p_max"]))
+            if build_var is not None:
+                try:
+                    build_val = float(pyo.value(build_var))
+                except Exception:  # pragma: no cover - defensive
+                    build_val = 1.0 if energy_cap > 0 else 0.0
         storage_section["Charge_MWh"] = float(sum(charge_series) * dt_h)
         storage_section["Discharge_MWh"] = float(sum(discharge_series) * dt_h)
         storage_section["Average_SOC_MWh"] = float(sum(soc_series) / len(soc_series)) if n else 0.0
         storage_section["Min_SOC_MWh"] = float(min(soc_series)) if soc_series else 0.0
         storage_section["Max_SOC_MWh"] = float(max(soc_series)) if soc_series else 0.0
+        storage_section["Capacity_MWh"] = energy_cap
+        storage_section["Power_limit_MW"] = power_cap
+        storage_section["Build_binary"] = build_val
+        storage_section["Capacity_bounds_MWh"] = [
+            meta["storage"].get("e_cap_min", 0.0),
+            meta["storage"].get("e_cap_max", energy_cap),
+        ]
+        storage_section["Power_bounds_MW"] = [
+            meta["storage"].get("p_cap_min", 0.0),
+            meta["storage"].get("p_cap_max", power_cap),
+        ]
 
     total_emissions_t = float(grid_co2_t + fuel_emissions_t)
     co2_price = float(cfg.get("costs", {}).get("co2_price_eur_per_t", 0.0))
@@ -410,8 +545,21 @@ def _collect_timeseries_and_summary(
     objective["Dump_cost_EUR"] = dump_cost
     objective["CO2_cost_EUR"] = co2_cost
     objective["Demand_charge_cost_EUR"] = demand_cost
+    objective["Capex_cost_EUR"] = capex_cost
+    objective["Activation_cost_EUR"] = activation_cost
+    objective["Tie_breaker_cost_EUR"] = tie_break_cost
 
-    components_sum = energy_cost - energy_revenue + fuel_cost_total + dump_cost + co2_cost + demand_cost
+    components_sum = (
+        energy_cost
+        - energy_revenue
+        + fuel_cost_total
+        + dump_cost
+        + co2_cost
+        + demand_cost
+        + capex_cost
+        + activation_cost
+        + tie_break_cost
+    )
     objective["Objective_residual_EUR"] = objective["OBJ_value_EUR"] - components_sum
 
     grid_summary["Energy_from_grid_MWh"] = energy_in
