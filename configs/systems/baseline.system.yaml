@@ -1,0 +1,50 @@
+system:
+  heat_pumps:
+    - id: HP1
+      enabled: true
+      type: standard
+      max_th_mw: 40.0
+      min_th_mw: 5.0
+      wrg_source_column: WRG1_T_K
+    - id: HP2
+      enabled: true
+      type: standard
+      max_th_mw: 40.0
+      min_th_mw: 5.0
+      wrg_source_column: WRG2_T_K
+    - id: HP§
+      enabled: true
+      type: standard
+      max_th_mw: 40.0
+      min_th_mw: 5.0
+      wrg_source_column: WRG3_T_K
+
+  storage:
+    enabled: true
+    min_energy_mwh: 0.0
+    max_energy_mwh: 100.0
+    max_power_mw: 30.0
+    soc0_mwh: 0.0
+
+  generators:
+    hkw:
+      enabled: true
+      cap_th_mw: 75.0
+    gtost:
+      enabled: true
+      cap_th_mw: 41.3
+    p2h:
+      enabled: true
+      cap_th_mw: 10.0
+    bmhkw:
+      enabled: true
+      cap_th_mw: 15.0
+    hws:
+      enabled: true
+      cap_th_mw: 45.0
+    hww:
+      enabled: true
+      cap_th_mw: 45.0
+    ava:
+      enabled: true
+      cap_th_mw: 45.0

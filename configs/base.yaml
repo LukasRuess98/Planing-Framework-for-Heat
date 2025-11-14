@@ -1,0 +1,14 @@
+run:
+  dt_h: 1.0
+  solver: gurobi
+
+costs:
+  include_gridcost_in_energy: false
+  include_demand_charge_in_rh: true
+  include_co2_cost_in_objective: true
+  dump_cost_eur_per_mwh_th: 1.0
+  co2_price_eur_per_t: 100.0
+
+grid:
+  energy_fee_eur_mwh: 0.0
+  demand_charge_eur_per_mw_y: 120000.0

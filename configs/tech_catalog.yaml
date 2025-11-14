@@ -1,0 +1,49 @@
+fuels:
+  gas:
+    price_eur_mwh: 58.6
+    ef_kg_per_mwh_fuel: 201.6
+  biomass:
+    price_eur_mwh: 20.0
+    ef_kg_per_mwh_fuel: 0.0
+  waste:
+    price_eur_mwh: 10.0
+    ef_kg_per_mwh_fuel: 0.0
+
+generators:
+  hkw:
+    th_eff: 0.743
+    el_eff: 0.177
+    fuel_bus: gas
+  gtost:
+    th_eff: 0.466
+    el_eff: 0.36
+    fuel_bus: gas
+  bmhkw:
+    th_eff: 0.485
+    el_eff: 0.177
+    fuel_bus: biomass
+  hws:
+    th_eff: 0.936
+    el_eff: null
+    fuel_bus: gas
+  hww:
+    th_eff: 0.924
+    el_eff: null
+    fuel_bus: gas
+  ava:
+    th_eff: 1.0
+    el_eff: null
+    fuel_bus: waste
+
+heat_pumps:
+  cop:
+    deltaT_K: 20.0
+    deltaTpp_K: 5.0
+    sink_defaults:
+      Tsink_out_K: 363.15
+      Tsink_in_K: 343.15
+  types:
+    standard:
+      eta: 0.75
+      FQ: 0.10
+      min_load: 0.30
