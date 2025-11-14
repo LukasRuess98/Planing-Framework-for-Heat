@@ -293,7 +293,12 @@ def _run_rolling_horizon(
 
         _extend_series(aggregated_series, window_result.series, commit_len)
         aggregated_indices.extend(indices[:commit_len])
-        _accumulate_costs(aggregated_costs, window_result.costs)
+        _accumulate_costs(
+            aggregated_costs,
+            window_result.costs,
+            commit_len,
+            len(window_table),
+        )
 
         soc_next = _next_soc(window_result.series, commit_len, soc_next)
 
@@ -336,10 +341,18 @@ def _extend_series(
         dest.extend(slice_values)
 
 
-def _accumulate_costs(target: Dict[str, float], window_costs: Mapping[str, Any]) -> None:
+def _accumulate_costs(
+    target: Dict[str, float],
+    window_costs: Mapping[str, Any],
+    commit_len: int,
+    window_len: int,
+) -> None:
+    if commit_len <= 0 or window_len <= 0:
+        return
+    ratio = commit_len / window_len
     for key, value in window_costs.items():
         if isinstance(value, (int, float)) and math.isfinite(value):
-            target[key] = float(target.get(key, 0.0) + float(value))
+            target[key] = float(target.get(key, 0.0) + float(value) * ratio)
 
 
 def _next_soc(series: Mapping[str, List[float]], commit_len: int, fallback: Optional[float]) -> Optional[float]:
