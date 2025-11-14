@@ -1,0 +1,153 @@
+{
+  "objective": {
+    "OBJ_value_EUR": 1830345.0037983363,
+    "P_buy_peak_MW": 0.0,
+    "Grid_energy_cost_EUR": 0.0,
+    "Grid_sell_revenue_EUR": 4073636.792120061,
+    "Grid_net_cost_EUR": -4073636.792120061,
+    "Fuel_cost_EUR": 5361346.528148769,
+    "Fuel_emissions_t": 5420.129677699295,
+    "Dump_cost_EUR": 622.3000000000001,
+    "CO2_cost_EUR": 542012.9677699294,
+    "CO2_price_EUR_per_t": 100.0,
+    "Include_CO2_in_objective": true,
+    "Demand_charge_cost_EUR": 0.0,
+    "Capex_cost_EUR": 0.0,
+    "Activation_cost_EUR": 0.0,
+    "Tie_breaker_cost_EUR": 0.0,
+    "Period_fraction_of_year": 1.0,
+    "Objective_residual_EUR": -3.0174851417541504e-07
+  },
+  "grid": {
+    "Energy_from_grid_MWh": 0.0,
+    "Energy_to_grid_MWh": 26830.640514794664,
+    "Net_grid_import_MWh": -26830.640514794664,
+    "Average_purchase_price_EUR_MWh": 0.0,
+    "Average_sell_price_EUR_MWh": 151.82778770688756,
+    "Heat_dumped_MWh": 622.3000000000001,
+    "Dump_cost_rate_EUR_MWh": 1.0,
+    "Grid_CO2_emissions_t": 0.0,
+    "Total_CO2_emissions_t": 5420.129677699295,
+    "Heat_demand_MWh": 571221.1999999986
+  },
+  "storage_TES": {
+    "Charge_MWh": 189274.00392060424,
+    "Discharge_MWh": 170808.6374934185,
+    "Average_SOC_MWh": 13.399477208114265,
+    "Min_SOC_MWh": 0.0,
+    "Max_SOC_MWh": 100.0,
+    "Capacity_MWh": 100.0,
+    "Power_limit_MW": 30.0,
+    "Build_binary": 1.0,
+    "Investment_enabled": false,
+    "Capacity_bounds_MWh": [
+      100.0,
+      100.0
+    ],
+    "Power_bounds_MW": [
+      30.0,
+      30.0
+    ]
+  },
+  "heat_pump_HP1": {
+    "Heat_output_MWh": 1754.3268220560446,
+    "Electricity_input_MWh": 577.491477369578,
+    "Operating_hours_h": 128.0,
+    "Full_load_hours_h": 43.858170551401116,
+    "Thermal_capacity_MW": 40.0,
+    "Build_binary": 1.0,
+    "Investment_enabled": false,
+    "Capacity_bounds_MW": [
+      40.0,
+      40.0
+    ]
+  },
+  "heat_pump_HP2": {
+    "Heat_output_MWh": 1982.5720385665793,
+    "Electricity_input_MWh": 654.4778425086156,
+    "Operating_hours_h": 135.0,
+    "Full_load_hours_h": 49.56430096416448,
+    "Thermal_capacity_MW": 40.0,
+    "Build_binary": 1.0,
+    "Investment_enabled": false,
+    "Capacity_bounds_MW": [
+      40.0,
+      40.0
+    ]
+  },
+  "heat_pump_HP3": {
+    "Heat_output_MWh": 13572.567910812533,
+    "Electricity_input_MWh": 4493.5121739495025,
+    "Operating_hours_h": 722.0,
+    "Full_load_hours_h": 339.31419777031334,
+    "Thermal_capacity_MW": 40.0,
+    "Build_binary": 1.0,
+    "Investment_enabled": false,
+    "Capacity_bounds_MW": [
+      40.0,
+      40.0
+    ]
+  },
+  "generator_HKW": {
+    "Heat_output_MWh": 339.30000000000007,
+    "Fuel_input_MWh": 456.66218034992863,
+    "Fuel_cost_EUR": 26760.403768505817,
+    "Fuel_price_EUR_MWh": 58.6,
+    "Fuel_emissions_t": 92.06309555854561,
+    "Fuel_bus": "gas",
+    "Thermal_capacity_MW": 75.0,
+    "Power_output_MWh": 80.82920592193737
+  },
+  "generator_GTOST": {
+    "Heat_output_MWh": 12311.835498553317,
+    "Fuel_input_MWh": 26420.247850972886,
+    "Fuel_cost_EUR": 1548226.5240670112,
+    "Fuel_price_EUR_MWh": 58.6,
+    "Fuel_emissions_t": 5326.321966756133,
+    "Fuel_bus": "gas",
+    "Thermal_capacity_MW": 41.3,
+    "Power_output_MWh": 9511.28922635021
+  },
+  "generator_BMHKW": {
+    "Heat_output_MWh": 63009.68329533182,
+    "Fuel_input_MWh": 129916.87277389034,
+    "Fuel_cost_EUR": 2598337.4554778067,
+    "Fuel_price_EUR_MWh": 20.0,
+    "Fuel_emissions_t": 0.0,
+    "Fuel_bus": "biomass",
+    "Thermal_capacity_MW": 15.0,
+    "Power_output_MWh": 22995.28648097678
+  },
+  "generator_HWS": {
+    "Heat_output_MWh": 8.1,
+    "Fuel_input_MWh": 8.65384615384615,
+    "Fuel_cost_EUR": 507.1153846153844,
+    "Fuel_price_EUR_MWh": 58.6,
+    "Fuel_emissions_t": 1.7446153846153838,
+    "Fuel_bus": "gas",
+    "Thermal_capacity_MW": 45.0
+  },
+  "generator_HWW": {
+    "Heat_output_MWh": 0.0,
+    "Fuel_input_MWh": 0.0,
+    "Fuel_cost_EUR": 0.0,
+    "Fuel_price_EUR_MWh": 58.6,
+    "Fuel_emissions_t": 0.0,
+    "Fuel_bus": "gas",
+    "Thermal_capacity_MW": 45.0
+  },
+  "generator_AVA": {
+    "Heat_output_MWh": 118751.50294508299,
+    "Fuel_input_MWh": 118751.50294508299,
+    "Fuel_cost_EUR": 1187515.0294508298,
+    "Fuel_price_EUR_MWh": 10.0,
+    "Fuel_emissions_t": 0.0,
+    "Fuel_bus": "waste",
+    "Thermal_capacity_MW": 45.0
+  },
+  "p2h": {
+    "Heat_output_MWh": 30.970075579721428,
+    "Electricity_input_MWh": 31.282904625981754,
+    "Thermal_capacity_MW": 10.0
+  }
+}
