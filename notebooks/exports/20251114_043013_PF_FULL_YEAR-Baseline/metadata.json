@@ -1,0 +1,109 @@
+{
+  "run": {
+    "timestamp": "20251114_043013",
+    "output_directory": "exports\\20251114_043013_PF_FULL_YEAR-Baseline",
+    "dt_h": 1.0,
+    "n_steps": 8760,
+    "period_hours": 8760.0,
+    "pyomo_available": true
+  },
+  "scenario": {
+    "title": "Perfect Forecast Baseline",
+    "mode": "PF",
+    "tag": "PF_FULL_YEAR-Baseline",
+    "description": "Perfect-forecast Optimierung \u00fcber das komplette Zieljahr",
+    "horizon": {
+      "type": "full_year",
+      "year": 2023,
+      "enforce": true
+    }
+  },
+  "site": {
+    "input_xlsx": "Import_Data.xlsx",
+    "sheet_name": null,
+    "tz": "Europe/Berlin",
+    "input_time_is_local": true,
+    "ambiguous_policy": "first",
+    "duplicate_strategy": "drop_first",
+    "gap_strategy": "ffill",
+    "year_target": 2023,
+    "columns": {
+      "price_candidates": [
+        "Day_Ahead_Price \u20ac/MWh",
+        "Day Ahead Price \u20ac/MWh",
+        "strompreis"
+      ],
+      "heat_candidates": [
+        "W\u00e4rmebedarf MW",
+        "Waermebedarf MW",
+        "waermebedarf"
+      ],
+      "co2_candidates": [
+        "CO2_consumption_based kgCO2/MWh",
+        "co2_intensity_kgco2_mwh",
+        "co2 kgco2/mwh"
+      ],
+      "wrg1_q_candidates": [
+        "WRG1Q MW",
+        "WRG1 Q MW",
+        "WRG1_Q MW",
+        "WRG1_Q MW_th",
+        "wrg1qmw"
+      ],
+      "wrg1_t_candidates": [
+        "WRG1_T \u00b0C",
+        "WRG1 T \u00b0C",
+        "wrg1 temp c"
+      ],
+      "wrg2_q_candidates": [
+        "WRG2Q MW",
+        "WRG2 Q MW",
+        "WRG2_Q MW",
+        "WRG2_Q MW_th",
+        "wrg2qmw"
+      ],
+      "wrg2_t_candidates": [
+        "WRG2_T \u00b0C",
+        "WRG2 T \u00b0C",
+        "wrg2 temp c"
+      ],
+      "wrg3_q_candidates": [
+        "WRG3Q MW",
+        "WRG3 Q MW",
+        "WRG3_Q MW",
+        "WRG3_Q MW_th",
+        "wrg3qmw"
+      ],
+      "wrg3_t_candidates": [
+        "WRG3_T \u00b0C",
+        "WRG3 T \u00b0C",
+        "wrg3 temp c"
+      ],
+      "wrg4_q_candidates": [
+        "WRG4Q MW",
+        "WRG4 Q MW",
+        "WRG4_Q MW",
+        "WRG4_Q MW_th",
+        "wrg4qmw"
+      ],
+      "wrg4_t_candidates": [
+        "WRG4_T \u00b0C",
+        "WRG4 T \u00b0C",
+        "wrg4 temp c"
+      ]
+    }
+  },
+  "solver": {
+    "solver_requested": "gurobi",
+    "solver_used": "gurobi",
+    "pyomo_available": true,
+    "model_built": true,
+    "status": "ok",
+    "termination_condition": "optimal",
+    "wallclock_time_s": null,
+    "user_time_s": null,
+    "iterations": null,
+    "return_code": 0,
+    "message": "Model was solved to optimality (subject to tolerances), and an optimal solution is available."
+  }
+}
