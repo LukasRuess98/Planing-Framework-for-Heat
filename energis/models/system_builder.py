@@ -200,6 +200,11 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
         values = table[name]
         return {i + 1: float(values[i]) for i in range(T)}
 
+    def column_series(name: str) -> List[float] | None:
+        if name in table.columns:
+            return [float(table[name][i]) for i in range(T)]
+        return None
+
     m.price = pyo.Param(m.t, initialize=series_dict("strompreis_EUR_MWh"), mutable=True)
     m.heatd = pyo.Param(m.t, initialize=series_dict("waermebedarf_MWth"), mutable=True)
     m.grid_co2 = pyo.Param(m.t, initialize=series_dict("grid_co2_kg_MWh"), mutable=True)
@@ -252,6 +257,7 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
     capex_terms: List = []
     activation_terms: List = []
     tie_breaker_terms: List = []
+    storage_install_terms: List = []
 
     for hp in syscfg.get("heat_pumps", []):
         if not hp.get("enabled", True):
@@ -326,7 +332,8 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
 
     sto_cfg = syscfg.get("storage", {"enabled": False})
     if sto_cfg.get("enabled", False):
-        sto_defaults = cfg.get("storage", {}).get("investment_defaults", {})
+        storage_defaults = cfg.get("storage", {})
+        sto_defaults = storage_defaults.get("investment_defaults", {})
         sto_inv = dict(sto_defaults)
         sto_inv.update(sto_cfg.get("investment", {}))
         invest_enabled = bool(sto_inv.get("enabled", False))
@@ -337,30 +344,86 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
         e_cap_init = float(
             sto_inv.get(
                 "initial_energy_capacity_mwh",
-                sto_cfg.get("max_energy_mwh", e_cap_max) if not invest_enabled else max(e_cap_min, min(e_cap_max, sto_cfg.get("max_energy_mwh", e_cap_max))),
+                sto_cfg.get("max_energy_mwh", e_cap_max)
+                if not invest_enabled
+                else max(e_cap_min, min(e_cap_max, sto_cfg.get("max_energy_mwh", e_cap_max))),
             )
         )
         p_cap_init = float(
             sto_inv.get(
                 "initial_power_capacity_mw",
-                sto_cfg.get("max_power_mw", p_cap_max) if not invest_enabled else max(p_cap_min, min(p_cap_max, sto_cfg.get("max_power_mw", p_cap_max))),
+                sto_cfg.get("max_power_mw", p_cap_max)
+                if not invest_enabled
+                else max(p_cap_min, min(p_cap_max, sto_cfg.get("max_power_mw", p_cap_max))),
             )
         )
-        terminal_target = sto_cfg.get("terminal_soc_mwh")
-        if terminal_target is None:
-            horizon_cfg = cfg.get("scenario", {}).get("horizon", {})
-            if not bool(horizon_cfg.get("enforce", True)):
-                terminal_target = float(sto_cfg.get("soc0_mwh", 0.0))
+
+        inputs_cfg = cfg.get("inputs", {})
+        soc_init = sto_cfg.get("soc0_mwh")
+        if soc_init is None and "soc0_mwh" in storage_defaults:
+            soc_init = storage_defaults.get("soc0_mwh")
+        if "SOC_init" in inputs_cfg:
+            soc_init = inputs_cfg["SOC_init"]
+        elif "SOC_init" in sto_cfg:
+            soc_init = sto_cfg["SOC_init"]
+        else:
+            soc_init_series = column_series("SOC_init")
+            if soc_init_series:
+                soc_init = soc_init_series[0]
+        soc_init = float(soc_init if soc_init is not None else 0.0)
+
+        eff_charge_default = float(sto_cfg.get("eff_charge", storage_defaults.get("eff_charge", 0.95)))
+        eff_discharge_default = float(sto_cfg.get("eff_discharge", storage_defaults.get("eff_discharge", 0.95)))
+        loss_default = float(sto_cfg.get("loss_hour", storage_defaults.get("loss_hour", 0.9999)))
+
+        loss_series_spec = sto_cfg.get("loss_hour_series") or storage_defaults.get("loss_hour_series")
+        eff_charge_spec = sto_cfg.get("eff_charge_series") or storage_defaults.get("eff_charge_series")
+        eff_discharge_spec = sto_cfg.get("eff_discharge_series") or storage_defaults.get("eff_discharge_series")
+        capacity_active_spec = sto_cfg.get("capacity_active_series") or storage_defaults.get("capacity_active_series")
+
+        loss_series = loss_series_spec or column_series("storage_loss_hour")
+        eff_charge_series = eff_charge_spec or column_series("storage_eff_charge")
+        eff_discharge_series = eff_discharge_spec or column_series("storage_eff_discharge")
+        capacity_active_series = capacity_active_spec or column_series("storage_capacity_active")
+
+        horizon_cfg = cfg.get("scenario", {}).get("horizon", {})
+        enforce_terminal = bool(horizon_cfg.get("enforce", True))
+        terminal_cfg = sto_cfg.get("terminal", {})
+        terminal_policy = str(terminal_cfg.get("policy", "")).lower()
+        terminal_target_cfg = terminal_cfg.get("target_mwh", terminal_cfg.get("target"))
+        if terminal_target_cfg is None and "terminal_soc_mwh" in sto_cfg:
+            terminal_target_cfg = float(sto_cfg["terminal_soc_mwh"])
+            if not terminal_policy:
+                terminal_policy = "equal"
+        if not terminal_policy:
+            if terminal_target_cfg is not None:
+                terminal_policy = "equal"
+            elif not enforce_terminal:
+                terminal_policy = "equal"
+                terminal_target_cfg = soc_init
+            else:
+                terminal_policy = "equal"
+                terminal_target_cfg = soc_init
+        terminal_policy = terminal_policy or "equal"
+        if terminal_policy not in {"equal", "geq", "free"}:
+            terminal_policy = "equal"
+        terminal_target_val: float | None
+        if terminal_policy == "free":
+            terminal_target_val = None
+        else:
+            target_source = terminal_target_cfg if terminal_target_cfg is not None else soc_init
+            terminal_target_val = float(target_source)
+
         block = StorageBlock(
             "TES",
             e_min=sto_cfg.get("min_energy_mwh", 0.0),
             e_max=sto_cfg.get("max_energy_mwh", 50000.0),
             p_max=sto_cfg.get("max_power_mw", 50.0),
-            eff_c=0.95,
-            eff_d=0.95,
-            hourly_loss=0.9999,
+            eff_c=eff_charge_default,
+            eff_d=eff_discharge_default,
+            hourly_loss=loss_default,
             dt_h=dt_h,
-            soc0=float(sto_cfg.get("soc0_mwh", 0.0)),
+            soc0=soc_init,
             investable=invest_enabled,
             e_cap_min=e_cap_min,
             e_cap_max=e_cap_max,
@@ -368,12 +431,41 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
             p_cap_max=p_cap_max,
             e_cap_init=e_cap_init,
             p_cap_init=p_cap_init,
-            terminal_target=terminal_target,
+            terminal_target=None,
+            loss_series=loss_series,
+            eff_charge_series=eff_charge_series,
+            eff_discharge_series=eff_discharge_series,
+            capacity_active_series=capacity_active_series,
         )
         fs = block.attach(m, m.t, cfg, {})
         ht_out.append(fs["Q_th_out"])
         ht_in.append(fs["Q_th_in"])
         m.TES_SOC = pyo.Reference(fs["SOC"])
+        m.TES_charge_mode = pyo.Reference(fs["charge_mode"])
+        m.TES_discharge_mode = pyo.Reference(fs["discharge_mode"])
+        m.TES_active = pyo.Reference(fs["active"])
+        setattr(m, "TES_terminal_policy", terminal_policy)
+        if terminal_target_val is not None:
+            setattr(m, "TES_terminal_target", pyo.Param(initialize=terminal_target_val))
+            last_t = m.t.last()
+            if terminal_policy == "geq":
+                setattr(
+                    m,
+                    "TES_terminal",
+                    pyo.Constraint(expr=fs["SOC"][last_t] >= getattr(m, "TES_terminal_target")),
+                )
+            else:
+                setattr(
+                    m,
+                    "TES_terminal",
+                    pyo.Constraint(expr=fs["SOC"][last_t] == getattr(m, "TES_terminal_target")),
+                )
+        else:
+            if hasattr(m, "TES_terminal"):
+                delattr(m, "TES_terminal")
+            if hasattr(m, "TES_terminal_target"):
+                delattr(m, "TES_terminal_target")
+
         cap_var = fs.get("cap_energy")
         pow_var = fs.get("cap_power")
         build_var = fs.get("build")
@@ -382,18 +474,24 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
         p_capex = float(sto_inv.get("power_capex_eur_per_mw", sto_defaults.get("power_capex_eur_per_mw", 0.0)))
         activation = float(sto_inv.get("activation_cost_eur", sto_defaults.get("activation_cost_eur", 0.0)))
         tie_breaker = float(sto_inv.get("tie_breaker_eur_per_mwh", sto_defaults.get("tie_breaker_eur_per_mwh", 0.0)))
+        install_share = float(sto_inv.get("installation_cost_share", sto_defaults.get("installation_cost_share", 0.0)))
         if lifetime > 0:
             annual_factor = period_frac / lifetime
         else:
             annual_factor = 0.0
+        install_components: List = []
         if cap_var is not None:
             capex_terms.append(cap_var * e_capex * annual_factor)
+            install_components.append(cap_var * e_capex)
             if tie_breaker:
                 tie_breaker_terms.append(cap_var * tie_breaker)
         if pow_var is not None:
             capex_terms.append(pow_var * p_capex * annual_factor)
+            install_components.append(pow_var * p_capex)
         if build_var is not None:
             activation_terms.append(build_var * activation * annual_factor)
+        if install_share and install_components:
+            storage_install_terms.append(sum(install_components) * install_share * annual_factor)
 
     gens = syscfg.get("generators", {})
     fuel_cost_terms: List = []
@@ -496,13 +594,23 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
     capex_total = sum(capex_terms) if capex_terms else 0
     activation_total = sum(activation_terms) if activation_terms else 0
     tie_break_total = sum(tie_breaker_terms) if tie_breaker_terms else 0
+    storage_install_total = sum(storage_install_terms) if storage_install_terms else 0
 
     m.capex_cost_expr = capex_total
     m.activation_cost_expr = activation_total
     m.tie_break_cost_expr = tie_break_total
+    m.storage_install_cost_expr = storage_install_total
 
     m.obj = pyo.Objective(
-        expr=energy_cost + dump_cost + fuel_costs + co2_term + demand_term + capex_total + activation_total + tie_break_total,
+        expr=energy_cost
+        + dump_cost
+        + fuel_costs
+        + co2_term
+        + demand_term
+        + capex_total
+        + activation_total
+        + tie_break_total
+        + storage_install_total,
         sense=pyo.minimize,
     )
     return m
