@@ -130,6 +130,7 @@ def test_rh_only_workflow_aggregates(monkeypatch: pytest.MonkeyPatch, simple_con
     assert len(result.rh_result.windows) == 3
     assert result.rh_result.series["TES_SOC_MWh"] == [0.0, 1.0, 1.0, 2.0, 2.0]
     assert result.rh_result.series["P_buy_MW"] == [1.0, 1.0, 2.0, 2.0, 3.0]
+    assert result.rh_result.costs["objective.OBJ_value_EUR"] == pytest.approx(8.0 / 3.0)
 
 
 def test_pf_then_rh_fix_design(monkeypatch: pytest.MonkeyPatch, simple_config: dict) -> None:
