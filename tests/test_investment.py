@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timedelta
 
 import pytest
@@ -140,7 +141,9 @@ def test_storage_terminal_policy_and_costs():
                     "activation_cost_eur": 50.0,
                     "lifetime_years": 5.0,
                     "tie_breaker_eur_per_mwh": 0.5,
+                    "installation_cost_share": 0.1,
                 },
+                "terminal": {"policy": "equal", "target_mwh": 2.0},
             },
             "generators": {},
         },
@@ -150,8 +153,9 @@ def test_storage_terminal_policy_and_costs():
     model = build_model(table, cfg, dt_h=1.0)
     assert hasattr(model, "TES_terminal")
     target = cfg["system"]["storage"]["soc0_mwh"]
-    assert model.TES_terminal.lower == pytest.approx(target)
-    assert model.TES_terminal.upper == pytest.approx(target)
+    assert pyo.value(model.TES_terminal.lower) == pytest.approx(target)
+    assert pyo.value(model.TES_terminal.upper) == pytest.approx(target)
+    assert getattr(model, "TES_terminal_policy") == "equal"
 
     cap_e = getattr(model, "TES_cap_energy")
     cap_p = getattr(model, "TES_cap_power")
@@ -168,13 +172,15 @@ def test_storage_terminal_policy_and_costs():
     capex = (200.0 * 5.0 + 150.0 * 3.0) * (period_frac / 5.0)
     activation = 50.0 * (period_frac / 5.0)
     tie = 0.5 * 5.0
-    assert pyo.value(model.obj.expr) == pytest.approx(capex + activation + tie)
+    install = (200.0 * 5.0 + 150.0 * 3.0) * 0.1 * (period_frac / 5.0)
+    assert pyo.value(model.obj.expr) == pytest.approx(capex + activation + tie + install)
 
     series, summary, flat = _collect_timeseries_and_summary(table, cfg, 1.0, model)
     objective = summary["objective"]
     assert objective["Capex_cost_EUR"] == pytest.approx(capex)
     assert objective["Activation_cost_EUR"] == pytest.approx(activation)
     assert objective["Tie_breaker_cost_EUR"] == pytest.approx(tie)
+    assert objective["Storage_installation_cost_EUR"] == pytest.approx(install)
     assert objective["Objective_residual_EUR"] == pytest.approx(0.0)
 
     storage_section = summary["storage_TES"]
@@ -183,3 +189,131 @@ def test_storage_terminal_policy_and_costs():
     assert storage_section["Build_binary"] == pytest.approx(1.0)
     assert storage_section["Investment_enabled"] is True
     assert flat["objective.Tie_breaker_cost_EUR"] == pytest.approx(tie)
+    assert flat["objective.Storage_installation_cost_EUR"] == pytest.approx(install)
+
+
+@pytest.mark.skipif(not HAVE_PYOMO, reason="Pyomo not available")
+def test_storage_terminal_policy_variants():
+    table = _table(1)
+    base_cfg = {
+        "costs": {"include_co2_cost_in_objective": False, "include_gridcost_in_energy": False, "dump_cost_eur_per_mwh_th": 0.0},
+        "grid": {"demand_charge_eur_per_mw_y": 0.0, "energy_fee_eur_mwh": 0.0},
+        "storage": {"investment_defaults": {"lifetime_years": 20.0}},
+        "system": {
+            "heat_pumps": [],
+            "storage": {
+                "enabled": True,
+                "min_energy_mwh": 0.0,
+                "max_energy_mwh": 10.0,
+                "max_power_mw": 5.0,
+                "soc0_mwh": 1.0,
+            },
+            "generators": {},
+        },
+    }
+
+    cfg_equal = deepcopy(base_cfg)
+    cfg_equal["system"]["storage"]["terminal"] = {"policy": "equal", "target_mwh": 3.0}
+    model_eq = build_model(table, cfg_equal, dt_h=1.0)
+    assert getattr(model_eq, "TES_terminal_policy") == "equal"
+    assert hasattr(model_eq, "TES_terminal")
+    assert pyo.value(model_eq.TES_terminal.lower) == pytest.approx(3.0)
+    assert pyo.value(model_eq.TES_terminal.upper) == pytest.approx(3.0)
+
+    cfg_geq = deepcopy(base_cfg)
+    cfg_geq["system"]["storage"]["terminal"] = {"policy": "geq", "target_mwh": 1.5}
+    model_geq = build_model(table, cfg_geq, dt_h=1.0)
+    assert getattr(model_geq, "TES_terminal_policy") == "geq"
+    assert hasattr(model_geq, "TES_terminal")
+    assert model_geq.TES_terminal.lower == pytest.approx(1.5)
+    assert model_geq.TES_terminal.upper is None
+
+    cfg_free = deepcopy(base_cfg)
+    cfg_free["system"]["storage"]["terminal"] = {"policy": "free"}
+    model_free = build_model(table, cfg_free, dt_h=1.0)
+    assert getattr(model_free, "TES_terminal_policy") == "free"
+    assert not hasattr(model_free, "TES_terminal")
+    assert not hasattr(model_free, "TES_terminal_target")
+
+
+@pytest.mark.skipif(not HAVE_PYOMO, reason="Pyomo not available")
+def test_storage_soc_dynamics_with_scaling():
+    loss = [0.9, 0.8, 0.0]
+    eff_c = [0.95, 0.9, 0.0]
+    eff_d = [0.9, 0.85, 0.9]
+    active = [1.0, 1.0, 0.0]
+    table = _table(
+        3,
+        {
+            "storage_loss_hour": loss,
+            "storage_eff_charge": eff_c,
+            "storage_eff_discharge": eff_d,
+            "storage_capacity_active": active,
+        },
+    )
+    cfg = {
+        "costs": {"include_co2_cost_in_objective": False, "include_gridcost_in_energy": False, "dump_cost_eur_per_mwh_th": 0.0},
+        "grid": {"demand_charge_eur_per_mw_y": 0.0, "energy_fee_eur_mwh": 0.0},
+        "storage": {"investment_defaults": {"lifetime_years": 20.0}},
+        "system": {
+            "heat_pumps": [],
+            "storage": {
+                "enabled": True,
+                "min_energy_mwh": 0.0,
+                "max_energy_mwh": 100.0,
+                "max_power_mw": 50.0,
+                "soc0_mwh": 1.0,
+                "investment": {"enabled": False},
+            },
+            "generators": {},
+        },
+    }
+
+    model = build_model(table, cfg, dt_h=1.0)
+    cap_e = getattr(model, "TES_cap_energy")
+    cap_p = getattr(model, "TES_cap_power")
+    build = getattr(model, "TES_build")
+    cap_e.fix(20.0)
+    cap_p.fix(10.0)
+    build.fix(1.0)
+
+    qc = getattr(model, "TES_Qc")
+    qd = getattr(model, "TES_Qd")
+    soc = getattr(model, "TES_E")
+    charge_mode = getattr(model, "TES_charge_mode")
+    discharge_mode = getattr(model, "TES_discharge_mode")
+    active_var = getattr(model, "TES_active")
+
+    qc[1].fix(2.0)
+    qd[1].fix(0.0)
+    qc[2].fix(0.0)
+    qd[2].fix(1.0)
+    qc[3].fix(0.0)
+    qd[3].fix(0.0)
+
+    charge_mode[1].fix(1)
+    discharge_mode[1].fix(0)
+    charge_mode[2].fix(0)
+    discharge_mode[2].fix(1)
+    charge_mode[3].fix(0)
+    discharge_mode[3].fix(0)
+
+    active_var[1].fix(1)
+    active_var[2].fix(1)
+    active_var[3].fix(0)
+
+    soc_expected = [2.8, 1.0635294118, 0.0]
+    soc[1].fix(soc_expected[0])
+    soc[2].fix(soc_expected[1])
+    soc[3].fix(soc_expected[2])
+
+    for t in model.t:
+        cons = getattr(model, "TES_soc")[t]
+        assert cons.lower == cons.upper
+        assert pyo.value(cons.body - cons.upper) == pytest.approx(0.0, abs=1e-9)
+
+    assert [pyo.value(model.TES_loss[t]) for t in model.t] == pytest.approx(loss)
+    assert [pyo.value(model.TES_effc[t]) for t in model.t] == pytest.approx(eff_c)
+    assert [pyo.value(model.TES_effd[t]) for t in model.t] == pytest.approx(eff_d)
+    assert [pyo.value(model.TES_capacity_active_limit[t]) for t in model.t] == pytest.approx(active)
+    assert pyo.value(soc[3]) == pytest.approx(0.0)

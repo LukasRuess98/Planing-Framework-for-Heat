@@ -261,6 +261,7 @@ def _collect_timeseries_and_summary(
             ("Capex_cost_EUR", 0.0),
             ("Activation_cost_EUR", 0.0),
             ("Tie_breaker_cost_EUR", 0.0),
+            ("Storage_installation_cost_EUR", 0.0),
             ("Period_fraction_of_year", period_fraction),
             ("Demand_charge_year_fraction", demand_year_fraction),
             ("Objective_residual_EUR", 0.0),
@@ -402,11 +403,13 @@ def _collect_timeseries_and_summary(
     capex_cost = 0.0
     activation_cost = 0.0
     tie_break_cost = 0.0
+    storage_install_cost = 0.0
 
     if model is not None and HAVE_PYOMO:
         capex_expr = getattr(model, "capex_cost_expr", None)
         activation_expr = getattr(model, "activation_cost_expr", None)
         tie_expr = getattr(model, "tie_break_cost_expr", None)
+        storage_install_expr = getattr(model, "storage_install_cost_expr", None)
         if capex_expr is not None:
             try:
                 capex_cost = float(pyo.value(capex_expr))
@@ -422,6 +425,11 @@ def _collect_timeseries_and_summary(
                 tie_break_cost = float(pyo.value(tie_expr))
             except Exception:  # pragma: no cover - defensive
                 tie_break_cost = 0.0
+        if storage_install_expr is not None:
+            try:
+                storage_install_cost = float(pyo.value(storage_install_expr))
+            except Exception:  # pragma: no cover - defensive
+                storage_install_cost = 0.0
 
     for hp in meta["heat_pumps"]:
         comp = hp["id"]
@@ -584,6 +592,7 @@ def _collect_timeseries_and_summary(
     objective["Capex_cost_EUR"] = capex_cost
     objective["Activation_cost_EUR"] = activation_cost
     objective["Tie_breaker_cost_EUR"] = tie_break_cost
+    objective["Storage_installation_cost_EUR"] = storage_install_cost
 
     components_sum = (
         energy_cost
@@ -595,6 +604,7 @@ def _collect_timeseries_and_summary(
         + capex_cost
         + activation_cost
         + tie_break_cost
+        + storage_install_cost
     )
     objective["Objective_residual_EUR"] = objective["OBJ_value_EUR"] - components_sum
 
