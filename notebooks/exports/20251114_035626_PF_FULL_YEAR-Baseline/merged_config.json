@@ -1,0 +1,241 @@
+{
+  "run": {
+    "dt_h": 1.0,
+    "solver": "gurobi"
+  },
+  "costs": {
+    "include_gridcost_in_energy": false,
+    "include_demand_charge_in_rh": true,
+    "include_co2_cost_in_objective": true,
+    "dump_cost_eur_per_mwh_th": 1.0,
+    "co2_price_eur_per_t": 100.0
+  },
+  "grid": {
+    "energy_fee_eur_mwh": 0.0,
+    "demand_charge_eur_per_mw_y": 120000.0
+  },
+  "fuels": {
+    "gas": {
+      "price_eur_mwh": 58.6,
+      "ef_kg_per_mwh_fuel": 201.6
+    },
+    "biomass": {
+      "price_eur_mwh": 20.0,
+      "ef_kg_per_mwh_fuel": 0.0
+    },
+    "waste": {
+      "price_eur_mwh": 10.0,
+      "ef_kg_per_mwh_fuel": 0.0
+    }
+  },
+  "generators": {
+    "hkw": {
+      "th_eff": 0.743,
+      "el_eff": 0.177,
+      "fuel_bus": "gas"
+    },
+    "gtost": {
+      "th_eff": 0.466,
+      "el_eff": 0.36,
+      "fuel_bus": "gas"
+    },
+    "bmhkw": {
+      "th_eff": 0.485,
+      "el_eff": 0.177,
+      "fuel_bus": "biomass"
+    },
+    "hws": {
+      "th_eff": 0.936,
+      "el_eff": null,
+      "fuel_bus": "gas"
+    },
+    "hww": {
+      "th_eff": 0.924,
+      "el_eff": null,
+      "fuel_bus": "gas"
+    },
+    "ava": {
+      "th_eff": 1.0,
+      "el_eff": null,
+      "fuel_bus": "waste"
+    }
+  },
+  "heat_pumps": {
+    "cop": {
+      "deltaT_K": 20.0,
+      "deltaTpp_K": 5.0,
+      "sink_defaults": {
+        "Tsink_out_K": 363.15,
+        "Tsink_in_K": 343.15
+      }
+    },
+    "types": {
+      "standard": {
+        "eta": 0.75,
+        "FQ": 0.1,
+        "min_load": 0.3
+      }
+    }
+  },
+  "site": {
+    "input_xlsx": "Import_Data.xlsx",
+    "sheet_name": null,
+    "tz": "Europe/Berlin",
+    "input_time_is_local": true,
+    "ambiguous_policy": "first",
+    "duplicate_strategy": "drop_first",
+    "gap_strategy": "ffill",
+    "year_target": 2023,
+    "columns": {
+      "price_candidates": [
+        "Day_Ahead_Price \u20ac/MWh",
+        "Day Ahead Price \u20ac/MWh",
+        "strompreis"
+      ],
+      "heat_candidates": [
+        "W\u00e4rmebedarf MW",
+        "Waermebedarf MW",
+        "waermebedarf"
+      ],
+      "co2_candidates": [
+        "CO2_consumption_based kgCO2/MWh",
+        "co2_intensity_kgco2_mwh",
+        "co2 kgco2/mwh"
+      ],
+      "wrg1_q_candidates": [
+        "WRG1Q MW",
+        "WRG1 Q MW",
+        "WRG1_Q MW",
+        "WRG1_Q MW_th",
+        "wrg1qmw"
+      ],
+      "wrg1_t_candidates": [
+        "WRG1_T \u00b0C",
+        "WRG1 T \u00b0C",
+        "wrg1 temp c"
+      ],
+      "wrg2_q_candidates": [
+        "WRG2Q MW",
+        "WRG2 Q MW",
+        "WRG2_Q MW",
+        "WRG2_Q MW_th",
+        "wrg2qmw"
+      ],
+      "wrg2_t_candidates": [
+        "WRG2_T \u00b0C",
+        "WRG2 T \u00b0C",
+        "wrg2 temp c"
+      ],
+      "wrg3_q_candidates": [
+        "WRG3Q MW",
+        "WRG3 Q MW",
+        "WRG3_Q MW",
+        "WRG3_Q MW_th",
+        "wrg3qmw"
+      ],
+      "wrg3_t_candidates": [
+        "WRG3_T \u00b0C",
+        "WRG3 T \u00b0C",
+        "wrg3 temp c"
+      ],
+      "wrg4_q_candidates": [
+        "WRG4Q MW",
+        "WRG4 Q MW",
+        "WRG4_Q MW",
+        "WRG4_Q MW_th",
+        "wrg4qmw"
+      ],
+      "wrg4_t_candidates": [
+        "WRG4_T \u00b0C",
+        "WRG4 T \u00b0C",
+        "wrg4 temp c"
+      ]
+    }
+  },
+  "system": {
+    "heat_pumps": [
+      {
+        "id": "HP1",
+        "enabled": true,
+        "type": "standard",
+        "max_th_mw": 40.0,
+        "min_th_mw": 5.0,
+        "wrg_source_column": "WRG1_T_K"
+      },
+      {
+        "id": "HP2",
+        "enabled": true,
+        "type": "standard",
+        "max_th_mw": 40.0,
+        "min_th_mw": 5.0,
+        "wrg_source_column": "WRG2_T_K"
+      },
+      {
+        "id": "HP3",
+        "enabled": true,
+        "type": "standard",
+        "max_th_mw": 40.0,
+        "min_th_mw": 5.0,
+        "wrg_source_column": "WRG3_T_K"
+      }
+    ],
+    "storage": {
+      "enabled": true,
+      "min_energy_mwh": 0.0,
+      "max_energy_mwh": 100.0,
+      "max_power_mw": 30.0,
+      "soc0_mwh": 0.0
+    },
+    "generators": {
+      "hkw": {
+        "enabled": true,
+        "cap_th_mw": 75.0
+      },
+      "gtost": {
+        "enabled": true,
+        "cap_th_mw": 41.3
+      },
+      "p2h": {
+        "enabled": true,
+        "cap_th_mw": 10.0
+      },
+      "bmhkw": {
+        "enabled": true,
+        "cap_th_mw": 15.0
+      },
+      "hws": {
+        "enabled": true,
+        "cap_th_mw": 45.0
+      },
+      "hww": {
+        "enabled": true,
+        "cap_th_mw": 45.0
+      },
+      "ava": {
+        "enabled": true,
+        "cap_th_mw": 45.0
+      }
+    }
+  },
+  "scenario": {
+    "title": "Perfect Forecast Baseline",
+    "mode": "PF",
+    "tag": "PF_FULL_YEAR-Baseline",
+    "description": "Perfect-forecast Optimierung \u00fcber das komplette Zieljahr",
+    "horizon": {
+      "type": "full_year",
+      "year": 2023,
+      "enforce": true
+    }
+  },
+  "meta": {
+    "config_hash": "a03a7d5056525814",
+    "merged_from": [
+      "C:\\Users\\LKR\\Documents\\GitHub\\Energy_Framwork\\Planing-Framework-for-Heat\\configs\\base.yaml",
+      "C:\\Users\\LKR\\Documents\\GitHub\\Energy_Framwork\\Planing-Framework-for-Heat\\configs\\tech_catalog.yaml",
+      "C:\\Users\\LKR\\Documents\\GitHub\\Energy_Framwork\\Planing-Framework-for-Heat\\configs\\sites\\default.site.yaml",
+      "C:\\Users\\LKR\\Documents\\GitHub\\Energy_Framwork\\Planing-Framework-for-Heat\\configs\\systems\\baseline.system.yaml",
+      "C:\\Users\\LKR\\Documents\\GitHub\\Energy_Framwork\\Planing-Framework-for-Heat\\configs\\scenarios\\perfect_forecast_full_year.scenario.yaml"
+    ]
+  }
+}
