@@ -5,9 +5,9 @@ cfg_paths = [
     "configs/tech_catalog.yaml",
     "configs/sites/default.site.yaml",
     "configs/systems/baseline.system.yaml",
-    "configs/scenarios/pf_then_rh.scenario.yaml",
+    "configs/scenarios/perfect_forecast_full_year.scenario.yaml",
     # "configs/overrides.local.yaml",  # optional
 ]
 
-res = run_all(cfg_paths, overrides=None)
+res = run_all(cfg_paths, overrides={"scenario": {"horizon": {"enforce": False}}})
 print("Export:", res.get("scenario_xlsx"))
