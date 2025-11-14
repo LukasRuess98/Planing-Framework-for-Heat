@@ -19,6 +19,7 @@ class HeatPumpBlock:
         capacity_init_mw: float,
         investable: bool,
         wrg_cap_series: Optional[Dict[int, float]] = None,
+        cop_default: float = 3.0,
     ):
         self.name = name
         self.min_load = float(min_load)
@@ -28,6 +29,7 @@ class HeatPumpBlock:
         self.capacity_init_mw = float(capacity_init_mw)
         self.investable = bool(investable)
         self.wrg_cap_series = wrg_cap_series or {}
+        self.cop_default = float(cop_default) if cop_default else 3.0
 
     def attach(self, m, Tset, cfg, buses):
         if pyo is None:
@@ -35,7 +37,8 @@ class HeatPumpBlock:
         # Create variables
         comp = self.name
         setattr(m, f"{comp}_Q", pyo.Var(Tset, domain=pyo.NonNegativeReals))  # heat out
-        setattr(m, f"{comp}_Pel", pyo.Var(Tset, domain=pyo.NonNegativeReals)) # electricity in
+        setattr(m, f"{comp}_Q_wrg", pyo.Var(Tset, domain=pyo.NonNegativeReals))  # heat from WRG
+        setattr(m, f"{comp}_Q_def", pyo.Var(Tset, domain=pyo.NonNegativeReals))  # fallback heat
         setattr(m, f"{comp}_on", pyo.Var(Tset, domain=pyo.Binary))
         setattr(m, f"{comp}_build", pyo.Var(domain=pyo.Binary))
         setattr(
@@ -45,7 +48,8 @@ class HeatPumpBlock:
         )
 
         Q = getattr(m, f"{comp}_Q")
-        Pel = getattr(m, f"{comp}_Pel")
+        Q_wrg = getattr(m, f"{comp}_Q_wrg")
+        Q_def = getattr(m, f"{comp}_Q_def")
         onv = getattr(m, f"{comp}_on")
         build = getattr(m, f"{comp}_build")
         cap = getattr(m, f"{comp}_cap_mw")
@@ -54,6 +58,8 @@ class HeatPumpBlock:
         setattr(m, f"{comp}_minload", pyo.Param(initialize=self.min_load))
         COPp = pyo.Param(Tset, initialize={t: self.COP_series[t-1] for t in Tset}, mutable=False)
         setattr(m, f"{comp}_COP", COPp)
+        setattr(m, f"{comp}_COP_default", pyo.Param(initialize=self.cop_default, mutable=False))
+        COP_def = getattr(m, f"{comp}_COP_default")
 
         if not self.investable:
             build.fix(1 if self.capacity_init_mw > 0 else 0)
@@ -73,9 +79,15 @@ class HeatPumpBlock:
             return Q[t] >= mm.__getattribute__(f"{comp}_minload") * cap * onv[t]
         setattr(m, f"{comp}_min", pyo.Constraint(Tset, rule=min_rule))
 
-        def pel_link(mm, t):
-            return Pel[t] == Q[t] / mm.__getattribute__(f"{comp}_COP")[t]
-        setattr(m, f"{comp}_el_link", pyo.Constraint(Tset, rule=pel_link))
+        def split_balance(mm, t):
+            return Q[t] == Q_wrg[t] + Q_def[t]
+        setattr(m, f"{comp}_split_balance", pyo.Constraint(Tset, rule=split_balance))
+
+        def pel_expr_rule(mm, t):
+            return Q_wrg[t] / mm.__getattribute__(f"{comp}_COP")[t] + Q_def[t] / COP_def
+
+        Pel_expr = pyo.Expression(Tset, rule=pel_expr_rule)
+        setattr(m, f"{comp}_Pel", Pel_expr)
 
         def cap_hi(mm):
             return cap <= mm.__getattribute__(f"{comp}_cap_max") * build
@@ -94,15 +106,17 @@ class HeatPumpBlock:
             setattr(m, f"{comp}_WRG_cap", wrg_param)
 
             def wrg_rule(mm, t):
-                return Q[t] <= wrg_param[t]
+                return Q_wrg[t] <= wrg_param[t]
 
             setattr(m, f"{comp}_wrg_limit", pyo.Constraint(Tset, rule=wrg_rule))
 
         # Flows to buses
         return {
             "Q_th_out": Q,
-            "P_el_in": Pel,
+            "P_el_in": Pel_expr,
             "build": build,
             "capacity": cap,
+            "Q_wrg": Q_wrg,
+            "Q_def": Q_def,
         }
 

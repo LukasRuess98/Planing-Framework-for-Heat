@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Sequence
 import math
 
 try:
@@ -17,8 +17,139 @@ from .blocks.thermal_gen import ThermalGeneratorBlock
 from .blocks.p2h import P2HBlock
 
 
-def _cop_series_from_table(table: TimeSeriesTable, wrg_col: str | None, cfg: Dict[str, Any], hp_type: str) -> List[float]:
+def _cop_series_from_table(
+    table: TimeSeriesTable, wrg_col: str | None, cfg: Dict[str, Any], hp_type: str
+) -> List[float]:
     copcfg = cfg.get("heat_pumps", {}).get("cop", {})
+    tables_cfg = copcfg.get("tables", {})
+    table_spec = tables_cfg.get(hp_type) or tables_cfg.get("default")
+
+    def _validate_axis(values: Sequence[float], axis_name: str) -> List[float]:
+        axis = [float(v) for v in values]
+        if not axis:
+            raise ValueError(f"COP table axis '{axis_name}' is empty")
+        if any(not math.isfinite(v) for v in axis):
+            raise ValueError(f"COP table axis '{axis_name}' enthält ungültige Werte")
+        if axis != sorted(axis):
+            raise ValueError(f"COP table axis '{axis_name}' muss aufsteigend sortiert sein")
+        return axis
+
+    def _locate_interval(points: List[float], value: float, clamp: bool, axis_name: str) -> tuple[int, int, float]:
+        if len(points) == 1:
+            return 0, 0, 0.0
+        if value <= points[0]:
+            if clamp:
+                return 0, 0, 0.0
+            raise ValueError(f"Wert {value} liegt unterhalb der COP-Tabelle für {axis_name}")
+        if value >= points[-1]:
+            if clamp:
+                idx = len(points) - 1
+                return idx, idx, 0.0
+            raise ValueError(f"Wert {value} liegt oberhalb der COP-Tabelle für {axis_name}")
+        for i in range(len(points) - 1):
+            lo = points[i]
+            hi = points[i + 1]
+            if lo <= value <= hi or math.isclose(value, lo) or math.isclose(value, hi):
+                span = max(hi - lo, 1e-12)
+                frac = (value - lo) / span
+                return i, i + 1, min(max(frac, 0.0), 1.0)
+        # Should not happen due to bounds above
+        raise ValueError(f"Wert {value} konnte nicht in COP-Achse {axis_name} zugeordnet werden")
+
+    def _interp1d(points: List[float], values: List[float], i0: int, i1: int, frac: float) -> float:
+        if i0 == i1:
+            return values[i0]
+        v0 = values[i0]
+        v1 = values[i1]
+        return v0 + frac * (v1 - v0)
+
+    def _interp2d(
+        x_points: List[float],
+        matrix: List[List[float]],
+        x_idx0: int,
+        x_idx1: int,
+        x_frac: float,
+        y_idx0: int,
+        y_idx1: int,
+        y_frac: float,
+    ) -> float:
+        if y_idx0 == y_idx1:
+            return _interp1d(x_points, matrix[y_idx0], x_idx0, x_idx1, x_frac)
+        # Interpolate along x for both y positions, then between them
+        row0 = matrix[y_idx0]
+        row1 = matrix[y_idx1]
+        v0 = _interp1d(x_points, row0, x_idx0, x_idx1, x_frac)
+        v1 = _interp1d(x_points, row1, x_idx0, x_idx1, x_frac)
+        return v0 + y_frac * (v1 - v0)
+
+    def _series_from_column(column: str | None, default: float | None) -> List[float]:
+        if column and column in table.columns:
+            return [float(table[column][i]) for i in range(len(table))]
+        if default is not None:
+            return [float(default) for _ in range(len(table))]
+        raise KeyError(f"Benötigte Spalte {column!r} für COP-Berechnung fehlt")
+
+    if table_spec:
+        x_points = _validate_axis(table_spec.get("x") or table_spec.get("source_temperatures_K", []), "x")
+        y_points_raw: Sequence[float] | None = table_spec.get("y") or table_spec.get("sink_temperatures_K")
+        has_y = bool(y_points_raw)
+        y_points = _validate_axis(y_points_raw, "y") if has_y else None
+        values_raw = table_spec.get("values")
+        if values_raw is None:
+            raise ValueError("COP-Tabelle benötigt einen 'values'-Eintrag")
+        if has_y:
+            matrix = [[float(v) for v in row] for row in values_raw]
+            if len(matrix) != len(y_points):
+                raise ValueError("COP-Tabelle: Anzahl der Zeilen passt nicht zur y-Achse")
+            for row in matrix:
+                if len(row) != len(x_points):
+                    raise ValueError("COP-Tabelle: Jede Zeile muss gleich viele Werte wie die x-Achse besitzen")
+        else:
+            vector = [float(v) for v in values_raw]
+            if len(vector) != len(x_points):
+                raise ValueError("COP-Tabelle (1D): Anzahl der Werte passt nicht zur x-Achse")
+            matrix = [vector]
+            y_points = [0.0]
+            has_y = False
+
+        clamp_default = bool(table_spec.get("clamp", True))
+        clamp_x = bool(table_spec.get("clamp_x", clamp_default))
+        clamp_y = bool(table_spec.get("clamp_y", clamp_default))
+
+        sink_defaults = copcfg.get("sink_defaults", {})
+        Ts_out = float(sink_defaults.get("Tsink_out_K", 363.15))
+
+        x_series = _series_from_column(table_spec.get("x_column") or wrg_col, table_spec.get("x_default"))
+        y_column = table_spec.get("y_column")
+        y_series = _series_from_column(y_column, table_spec.get("y_default", Ts_out)) if has_y else [0.0] * len(table)
+
+        cop_min = float(table_spec.get("cop_min", copcfg.get("cop_min", 1.01)))
+        cop_max = float(table_spec.get("cop_max", copcfg.get("cop_max", 12.0)))
+
+        result: List[float] = []
+        for xv, yv in zip(x_series, y_series):
+            x_idx0, x_idx1, x_frac = _locate_interval(x_points, float(xv), clamp_x, "x")
+            if has_y:
+                y_idx0, y_idx1, y_frac = _locate_interval(y_points, float(yv), clamp_y, "y")
+            else:
+                y_idx0 = y_idx1 = 0
+                y_frac = 0.0
+            val = _interp2d(
+                x_points,
+                matrix,
+                x_idx0,
+                x_idx1,
+                x_frac,
+                y_idx0,
+                y_idx1,
+                y_frac,
+            )
+            if not math.isfinite(val):
+                raise ValueError("COP-Tabelle lieferte keinen gültigen Wert")
+            result.append(float(min(max(val, cop_min), cop_max)))
+        return result
+
+    # Fallback auf analytische Berechnung
     dT = float(copcfg.get("deltaT_K", 20.0))
     dTpp = float(copcfg.get("deltaTpp_K", 5.0))
     sink = copcfg.get("sink_defaults", {})
@@ -51,7 +182,7 @@ def _cop_series_from_table(table: TimeSeriesTable, wrg_col: str | None, cfg: Dic
         B = (1 + (mdts + dTpp) / max(1e-9, Ls)) / (1 + (mdts + 0.5 * (Tin - Tout_i) + 2 * dTpp) / max(1e-9, (Ls - Lsrc)))
         val = A * B * eta * (1 - qww) + 1 - eta - FQ
         if not math.isfinite(val) or val < 1.01:
-            val = 3.0
+            val = float(copcfg.get("cop_fallback", 3.0))
         cop.append(float(min(max(val, 1.01), 12.0)))
     return cop
 
@@ -146,7 +277,12 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
                 existing_cap if not invest_enabled else max(cap_min, min(existing_cap, cap_max)),
             )
         )
-        min_load = float(cfg.get("heat_pumps", {}).get("types", {}).get(hp_type, {}).get("min_load", 0.3))
+        type_cfg = cfg.get("heat_pumps", {}).get("types", {})
+        type_par = type_cfg.get(hp_type, {})
+        min_load = float(type_par.get("min_load", 0.3))
+        cop_default = float(type_par.get("COPdefault", cfg.get("heat_pumps", {}).get("cop", {}).get("cop_fallback", 3.0)))
+        if not math.isfinite(cop_default) or cop_default <= 0:
+            cop_default = 3.0
 
         block = HeatPumpBlock(
             name,
@@ -157,6 +293,7 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
             capacity_init_mw=cap_init,
             investable=invest_enabled,
             wrg_cap_series=wrg_caps,
+            cop_default=cop_default,
         )
         fs = block.attach(m, m.t, cfg, {})
         ht_out.append(fs["Q_th_out"])

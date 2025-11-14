@@ -221,6 +221,8 @@ def _collect_timeseries_and_summary(
         series[f"{comp}_Q_th_MW"] = [0.0] * n
         series[f"{comp}_Pel_MW"] = [0.0] * n
         series[f"{comp}_on"] = [0.0] * n
+        series[f"{comp}_Q_wrg_MW"] = [0.0] * n
+        series[f"{comp}_Q_def_MW"] = [0.0] * n
 
     if meta["storage"]:
         series["TES_SOC_MWh"] = [0.0] * n
@@ -321,6 +323,8 @@ def _collect_timeseries_and_summary(
             _extract(getattr(model, f"{comp}_Q", None), f"{comp}_Q_th_MW")
             _extract(getattr(model, f"{comp}_Pel", None), f"{comp}_Pel_MW")
             _extract(getattr(model, f"{comp}_on", None), f"{comp}_on")
+            _extract(getattr(model, f"{comp}_Q_wrg", None), f"{comp}_Q_wrg_MW")
+            _extract(getattr(model, f"{comp}_Q_def", None), f"{comp}_Q_def_MW")
 
         if meta["storage"]:
             _extract(getattr(model, "TES_E", None), "TES_SOC_MWh")

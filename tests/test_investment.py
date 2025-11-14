@@ -80,7 +80,8 @@ def test_heat_pump_investment_costs():
     model.Q_dump[1].fix(0.0)
     model.P_buy_peak.fix(0.0)
     getattr(model, "HP_INV_Q")[1].fix(0.0)
-    getattr(model, "HP_INV_Pel")[1].fix(0.0)
+    getattr(model, "HP_INV_Q_wrg")[1].fix(0.0)
+    getattr(model, "HP_INV_Q_def")[1].fix(0.0)
     getattr(model, "HP_INV_on")[1].fix(0)
 
     period_frac = 1.0 / 8760.0
