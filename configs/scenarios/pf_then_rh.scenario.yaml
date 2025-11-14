@@ -1,0 +1,11 @@
+scenario:
+  title: PF followed by rolling horizon
+  run_mode: PF_THEN_RH
+  workflow:
+    - PF
+    - RH
+  fix_design: true
+  rolling_horizon:
+    HEAT_HORIZON_HOURS: 168
+    STEP_HOURS: 24
+    terminal_policy: free
