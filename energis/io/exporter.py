@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from numbers import Number
 from typing import Iterable, Mapping, Sequence
 import json
@@ -26,28 +27,117 @@ def _ensure_lengths(data: Mapping[str, Sequence[float]], expected: int) -> None:
             raise ValueError(f"Serie {key!r} hat Länge {len(values)} statt {expected}")
 
 
-def write_timeseries_csv(path: str, table: TimeSeriesTable, extra: Mapping[str, Sequence[float]]) -> None:
-    """Write input and result time series to a semicolon separated CSV file."""
+def write_timeseries_csv(
+    path: str,
+    table: TimeSeriesTable,
+    extra: Mapping[str, Sequence[float]],
+    *,
+    decimal_separator: str = ",",
+    alternate_path: str | None = None,
+    alternate_decimal_separator: str = ".",
+) -> None:
+    """Write input and result time series to a semicolon separated CSV file.
+
+    Parameters
+    ----------
+    path:
+        Destination of the main CSV export.
+    table:
+        The base time series table to be exported.
+    extra:
+        Additional series that should be exported next to the main table.
+    decimal_separator:
+        Decimal separator used for *path*. Defaults to a comma which is
+        convenient for German Excel installations.
+    alternate_path:
+        Optional second file that mirrors the exported content but allows
+        specifying a different decimal separator. This can be helpful when the
+        data should be double-checked in tools that prefer the conventional dot
+        separator.
+    alternate_decimal_separator:
+        Decimal separator used for *alternate_path*. Ignored when no alternate
+        path is supplied.
+    """
 
     n = len(table)
     _ensure_lengths(extra, n)
 
     columns = ["timestamp"] + table.columns + list(extra.keys())
+    _write_csv(
+        path,
+        columns,
+        table,
+        extra,
+        decimal_separator=decimal_separator,
+    )
+
+    if alternate_path:
+        _write_csv(
+            alternate_path,
+            columns,
+            table,
+            extra,
+            decimal_separator=alternate_decimal_separator,
+        )
+
+
+def _fmt_value(value: object, *, decimal_separator: str = ",") -> str:
+    if value is None:
+        return ""
+    if isinstance(value, Number) and not isinstance(value, bool):
+        decimal_value = _to_decimal(value)
+        text = _decimal_to_text(decimal_value)
+        return _apply_decimal_separator(text, decimal_separator)
+    return str(value)
+
+
+def _write_csv(
+    path: str,
+    columns: Sequence[str],
+    table: TimeSeriesTable,
+    extra: Mapping[str, Sequence[float]],
+    *,
+    decimal_separator: str,
+) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(";".join(columns) + "\n")
         for idx, ts in enumerate(table.index):
             base = [ts.isoformat() if isinstance(ts, datetime) else str(ts)]
-            base.extend(_fmt_value(table[col][idx]) for col in table.columns)
-            base.extend(_fmt_value(extra[name][idx]) for name in extra)
+            base.extend(
+                _fmt_value(table[col][idx], decimal_separator=decimal_separator)
+                for col in table.columns
+            )
+            base.extend(
+                _fmt_value(extra[name][idx], decimal_separator=decimal_separator)
+                for name in extra
+            )
             handle.write(";".join(base) + "\n")
 
 
-def _fmt_value(value: object) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, float):
-        return ("{0:.10f}".format(value)).rstrip("0").rstrip(".") or "0"
-    return str(value)
+def _to_decimal(value: Number | Decimal) -> Decimal:
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value))
+    except InvalidOperation:
+        return Decimal(value)
+
+
+def _decimal_to_text(value: Decimal) -> str:
+    text = format(value.normalize(), "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _apply_decimal_separator(text: str, decimal_separator: str) -> str:
+    if decimal_separator not in {",", "."}:
+        raise ValueError(
+            "decimal_separator must be ',' or '.' to avoid ambiguous CSV numbers"
+        )
+    if decimal_separator == ".":
+        return text
+    return text.replace(".", ",")
 
 
 def _normalize_excel_value(value: object) -> object:
