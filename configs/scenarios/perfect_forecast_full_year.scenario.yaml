@@ -1,0 +1,9 @@
+scenario:
+  title: Perfect Forecast Baseline
+  mode: PF
+  tag: PF_FULL_YEAR-Baseline
+  description: "Perfect-forecast Optimierung über das komplette Zieljahr"
+  horizon:
+    type: full_year
+    year: 2023
+    enforce: true

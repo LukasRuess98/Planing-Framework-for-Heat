@@ -1,3 +1,0 @@
-scenario:
-  title: Baseline
-  mode: PF_THEN_RH  # RH engine placeholder; PF-only solve currently exported as monolithic optimization

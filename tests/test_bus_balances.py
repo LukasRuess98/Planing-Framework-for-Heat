@@ -49,7 +49,7 @@ def test_bus_constraints_exist(tmp_path):
         "configs/tech_catalog.yaml",
         "configs/sites/default.site.yaml",
         "configs/systems/baseline.system.yaml",
-        "configs/scenarios/pf_then_rh.scenario.yaml",
+        "configs/scenarios/perfect_forecast_full_year.scenario.yaml",
     ])
     cfg["site"]["input_xlsx"] = str(xls)
     data = load_input_excel(cfg["site"]["input_xlsx"], cfg["site"], dt_hours=1.0)
