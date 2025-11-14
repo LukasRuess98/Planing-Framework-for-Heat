@@ -3,7 +3,7 @@ run:
   solver: gurobi
 
 costs:
-  include_gridcost_in_energy: false
+  include_gridcost_in_energy: true
   include_demand_charge_in_rh: true
   include_co2_cost_in_objective: true
   dump_cost_eur_per_mwh_th: 1.0
