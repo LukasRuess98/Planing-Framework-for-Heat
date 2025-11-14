@@ -28,7 +28,7 @@ It keeps the structure close to oemof/pypsa (configs, components, buses, orchest
        configs/tech_catalog.yaml \
        configs/sites/default.site.yaml \
        configs/systems/baseline.system.yaml \
-       configs/scenarios/pf_then_rh.workflow.scenario.yaml \
+      configs/scenarios/pf_then_rh.scenario.yaml \
        --print-design
    ```
 5. Or open `notebooks/01_scenario_studio.ipynb` and run.
