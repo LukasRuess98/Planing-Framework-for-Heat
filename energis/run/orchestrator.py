@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Dict, Any, List, Optional, Mapping
+from typing import Dict, Any, List, Optional, Mapping, Sequence
 import calendar
 from datetime import datetime
 import os
 import json
 import re
 import time
+import logging
+import math
 
 try:  # optional dependency
     import pyomo.environ as pyo
@@ -21,6 +23,9 @@ from energis.io.loader import load_input_excel
 from energis.io.exporter import write_timeseries_csv, write_excel_workbook
 from energis.models.system_builder import build_model
 from energis.utils.timeseries import TimeSeriesTable
+
+
+logger = logging.getLogger(__name__)
 
 
 def _json_safe(value: Any) -> Any:
@@ -242,7 +247,11 @@ def _collect_timeseries_and_summary(
         def _extract(var: Any | None, key: str) -> None:
             if var is None:
                 return
-            series[key] = [float(pyo.value(var[t])) for t in times]
+            try:
+                series[key] = _extract_pyomo_series(var, times, key)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Fehler beim Verarbeiten der Serie %s: %s", key, exc)
+
 
         _extract(getattr(model, "P_buy", None), "P_buy_MW")
         _extract(getattr(model, "P_sell", None), "P_sell_MW")
@@ -631,4 +640,40 @@ def run_all(config_paths: List[str], overrides: Optional[Dict[str, Any]] = None)
         "metadata": metadata_json,
         "scenario": scenario_cfg,
     }
+
+def _extract_pyomo_series(var: Any, times: Sequence[Any], name: str, tolerance: float = 1e-9) -> List[float]:
+    values: List[float] = []
+    for t in times:
+        try:
+            raw = pyo.value(var[t])
+        except Exception as exc:  # pragma: no cover - requires Pyomo specific failures
+            logger.warning("Konnte Pyomo-Wert %s[%s] nicht auslesen: %s", name, t, exc)
+            values.append(0.0)
+            continue
+
+        if raw is None:
+            logger.warning("Pyomo-Wert %s[%s] ist None", name, t)
+            values.append(0.0)
+            continue
+
+        try:
+            number = float(raw)
+        except (TypeError, ValueError) as exc:
+            logger.warning(
+                "Pyomo-Wert %s[%s] kann nicht in float umgewandelt werden: %s", name, t, exc
+            )
+            values.append(0.0)
+            continue
+
+        if not math.isfinite(number):
+            logger.warning("Pyomo-Wert %s[%s] ist nicht endlich (%s)", name, t, number)
+            values.append(0.0)
+            continue
+
+        if abs(number) < tolerance:
+            number = 0.0
+
+        values.append(number)
+
+    return values
 

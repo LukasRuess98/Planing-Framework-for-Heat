@@ -7,6 +7,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from numbers import Number
 from typing import Iterable, Mapping, Sequence
+import csv
 import json
 
 from energis.utils.timeseries import TimeSeriesTable
@@ -84,10 +85,23 @@ def write_timeseries_csv(
 def _fmt_value(value: object, *, decimal_separator: str = ",") -> str:
     if value is None:
         return ""
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return ""
+        try:
+            decimal_value = _to_decimal(stripped)
+        except InvalidOperation:
+            return value
+        text = _decimal_to_text(decimal_value)
+        return _apply_decimal_separator(text, decimal_separator)
+
     if isinstance(value, Number) and not isinstance(value, bool):
         decimal_value = _to_decimal(value)
         text = _decimal_to_text(decimal_value)
         return _apply_decimal_separator(text, decimal_separator)
+
     return str(value)
 
 
@@ -99,8 +113,14 @@ def _write_csv(
     *,
     decimal_separator: str,
 ) -> None:
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(";".join(columns) + "\n")
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(
+            handle,
+            delimiter=";",
+            quoting=csv.QUOTE_MINIMAL,
+            lineterminator="\n",
+        )
+        writer.writerow(columns)
         for idx, ts in enumerate(table.index):
             base = [ts.isoformat() if isinstance(ts, datetime) else str(ts)]
             base.extend(
@@ -111,12 +131,17 @@ def _write_csv(
                 _fmt_value(extra[name][idx], decimal_separator=decimal_separator)
                 for name in extra
             )
-            handle.write(";".join(base) + "\n")
+            writer.writerow(base)
 
 
-def _to_decimal(value: Number | Decimal) -> Decimal:
+def _to_decimal(value: Number | Decimal | str) -> Decimal:
     if isinstance(value, Decimal):
         return value
+
+    if isinstance(value, str):
+        normalized = value.replace(" ", "").replace(",", ".")
+        return Decimal(normalized)
+
     try:
         return Decimal(str(value))
     except InvalidOperation:
