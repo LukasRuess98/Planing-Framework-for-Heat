@@ -20,7 +20,7 @@ except Exception:  # pragma: no cover
 
 from energis.config.merge import load_and_merge
 from energis.io.loader import load_input_excel
-from energis.io.exporter import write_timeseries_csv, write_excel_workbook
+from energis.io.exporter import export_scenario_bundle, write_timeseries_csv
 from energis.io.plotter import export_plots
 from energis.models.system_builder import build_model
 from energis.utils.timeseries import TimeSeriesTable
@@ -200,6 +200,49 @@ def _flatten_summary(sections: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any
         for key, value in metrics.items():
             flat[f"{section}.{key}"] = value
     return flat
+
+
+def _as_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _extract_design_from_summary(
+    summary_sections: Mapping[str, Mapping[str, Any]]
+) -> OrderedDict[str, Any]:
+    heat_pumps: OrderedDict[str, Dict[str, float]] = OrderedDict()
+    storage_entry: OrderedDict[str, float] | None = None
+
+    for section, metrics in summary_sections.items():
+        if not isinstance(metrics, Mapping):
+            continue
+        if section.startswith("heat_pump_"):
+            hp_id = section.split("heat_pump_", 1)[1] or section
+            heat_pumps[hp_id] = {
+                "capacity_mw": _as_float(metrics.get("Thermal_capacity_MW")),
+                "build_binary": _as_float(
+                    metrics.get("Build_binary", metrics.get("Build"))
+                ),
+            }
+        elif section.startswith("storage_"):
+            storage_entry = OrderedDict(
+                [
+                    ("name", section.split("storage_", 1)[1] or section),
+                    ("capacity_mwh", _as_float(metrics.get("Capacity_MWh"))),
+                    ("power_mw", _as_float(metrics.get("Power_limit_MW"))),
+                    (
+                        "build_binary",
+                        _as_float(metrics.get("Build_binary", metrics.get("Build"))),
+                    ),
+                ]
+            )
+
+    design = OrderedDict()
+    design["heat_pumps"] = heat_pumps
+    design["storage"] = storage_entry
+    return design
 
 
 def _collect_timeseries_and_summary(
@@ -811,12 +854,71 @@ def run_all(config_paths: List[str], overrides: Optional[Dict[str, Any]] = None)
     if heat_pump_meta:
         metadata_sections["components_heat_pumps"] = heat_pump_meta
 
-    xlsx_file = os.path.join(outdir, "scenario_results.xlsx")
-    try:
-        write_excel_workbook(xlsx_file, table, series, summary_sections, metadata_sections)
-    except RuntimeError as exc:
-        print(f"[EXPORT] Excel-Export übersprungen: {exc}")
-        xlsx_file = None
+    pf_input_series: OrderedDict[str, List[float]] = OrderedDict(
+        (col, list(table[col])) for col in table.columns
+    )
+    pf_result_series: OrderedDict[str, List[float]] = OrderedDict(
+        (name, list(values)) for name, values in series.items()
+    )
+
+    timeseries_sections = [
+        {"label": "PF_input", "timestamps": list(table.index), "series": pf_input_series},
+    ]
+    if pf_result_series:
+        timeseries_sections.append(
+            {
+                "label": "PF_result",
+                "timestamps": list(table.index),
+                "series": pf_result_series,
+            }
+        )
+
+    cost_sections: OrderedDict[str, OrderedDict[str, Any]] = OrderedDict()
+    if costs:
+        cost_sections["PF"] = OrderedDict((str(key), value) for key, value in costs.items())
+
+    design_export = _extract_design_from_summary(summary_sections)
+
+    flags = OrderedDict(
+        [
+            ("has_pf", True),
+            ("has_rh", False),
+            (
+                "has_design",
+                bool(design_export.get("heat_pumps"))
+                or bool(design_export.get("storage")),
+            ),
+        ]
+    )
+
+    workflow_cfg = scenario_cfg.get("workflow") if isinstance(scenario_cfg, dict) else None
+    if isinstance(workflow_cfg, (list, tuple)):
+        workflow_steps = [str(step) for step in workflow_cfg]
+    else:
+        workflow_steps = [mode]
+
+    manifest_data = OrderedDict(
+        [
+            ("scenario_title", title),
+            ("run_mode", scenario_cfg.get("run_mode") or scenario_cfg.get("mode") or mode),
+            ("workflow_steps", workflow_steps),
+            ("flags", flags),
+            ("export_timestamp", stamp),
+            ("slug", _slugify(tag)),
+            ("output_directory", outdir),
+        ]
+    )
+
+    bundle_paths = dict(
+        export_scenario_bundle(
+            outdir,
+            meta_sections=metadata_sections,
+            timeseries_sections=timeseries_sections,
+            cost_sections=cost_sections,
+            design=design_export,
+            manifest=manifest_data,
+        )
+    )
 
     try:
         plot_files = export_plots(outdir, table, series, summary_sections)
@@ -841,12 +943,15 @@ def run_all(config_paths: List[str], overrides: Optional[Dict[str, Any]] = None)
 
     return {
         "scenario_csv": scen_file,
-        "scenario_xlsx": xlsx_file,
+        "scenario_xlsx": bundle_paths.get("scenario_xlsx"),
+        "pf_design_json": bundle_paths.get("pf_design_json"),
+        "manifest_json": bundle_paths.get("manifest_json"),
         "outdir": outdir,
         "costs": costs,
         "summary": summary_json,
         "metadata": metadata_json,
         "scenario": scenario_cfg,
+        "design": design_export,
         "plots": plot_files,
     }
 
