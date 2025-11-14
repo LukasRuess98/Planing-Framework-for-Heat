@@ -10,4 +10,5 @@ cfg_paths = [
 ]
 
 res = run_all(cfg_paths, overrides={"scenario": {"horizon": {"enforce": False}}})
-print("Export:", res.get("scenario_xlsx"))
+print("CSV Export:", res.get("scenario_csv"))
+print("Excel Export:", res.get("scenario_xlsx"))
