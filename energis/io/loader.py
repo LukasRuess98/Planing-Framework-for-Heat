@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from energis.utils.xlsx import read_xlsx
 from energis.utils.timeseries import TimeSeriesTable, fill_gaps
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _require(cond: bool, msg: str) -> None:
@@ -16,6 +20,36 @@ def _require(cond: bool, msg: str) -> None:
 
 def _normalise(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", name.lower())
+
+
+def _resolve_input_path(path: str, site_cfg: Dict[str, Any]) -> Path:
+    candidate = Path(path)
+    if candidate.is_absolute():
+        return candidate
+
+    search_roots = []
+
+    for key in ("input_base_dir", "input_dir", "data_root"):
+        base = site_cfg.get(key)
+        if isinstance(base, str) and base:
+            search_roots.append(Path(base))
+
+    env_root = os.getenv("ENERGIS_INPUT_ROOT")
+    if env_root:
+        search_roots.append(Path(env_root))
+
+    search_roots.extend([Path.cwd(), PROJECT_ROOT])
+
+    seen = set()
+    for root in search_roots:
+        if root in seen:
+            continue
+        seen.add(root)
+        resolved = (root / candidate).expanduser()
+        if resolved.exists():
+            return resolved.resolve()
+
+    raise RuntimeError(f"Datei nicht gefunden: {path}")
 
 
 def _parse_datetime(value: Any) -> datetime:
@@ -97,9 +131,9 @@ def load_input_excel(
     gap_strategy: str = "ffill",
     ambiguous_policy: str = "first",
 ) -> TimeSeriesTable:
-    _require(os.path.exists(path), f"Datei nicht gefunden: {path}")
-    header, rows = read_xlsx(path, sheet_name=site_cfg.get("sheet_name"))
-    _require(header, f"Excel-Datei {path} enthält keine Daten")
+    resolved_path = _resolve_input_path(path, site_cfg)
+    header, rows = read_xlsx(str(resolved_path), sheet_name=site_cfg.get("sheet_name"))
+    _require(header, f"Excel-Datei {resolved_path} enthält keine Daten")
     records = _build_records(header, rows)
 
     time_col = _find_time_column(header)
