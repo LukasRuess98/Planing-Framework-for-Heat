@@ -207,12 +207,20 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
     costs = cfg.get("costs", {})
     grid = cfg.get("grid", {})
     m.energy_fee = pyo.Param(initialize=float(grid.get("energy_fee_eur_mwh", 0.0)))
+    m.grid_cost = pyo.Param(initialize=float(grid.get("gridcost_eur_mwh", 0.0)))
+    m.sell_floor = pyo.Param(initialize=float(grid.get("sell_floor_eur_mwh", 0.0)))
+    m.sell_haircut = pyo.Param(initialize=float(grid.get("sell_haircut_fraction", 0.0)))
+    m.sell_spread = pyo.Param(initialize=float(grid.get("sell_spread_eur_mwh", 0.0)))
+    m.sell_fee = pyo.Param(initialize=float(grid.get("sell_fee_eur_mwh", 0.0)))
+    m.sell_premium = pyo.Param(initialize=float(grid.get("sell_premium_eur_mwh", 0.0)))
+    m.M_GRID = pyo.Param(initialize=float(grid.get("big_m_grid_mw", 1e4)))
+    m.year_frac = pyo.Param(initialize=float(grid.get("year_fraction", period_frac)))
     m.co2_price = pyo.Param(initialize=float(costs.get("co2_price_eur_per_t", 100.0)))
     m.dump_cost = pyo.Param(initialize=float(costs.get("dump_cost_eur_per_mwh_th", 1.0)))
     m.demand_charge_y = pyo.Param(initialize=float(grid.get("demand_charge_eur_per_mw_y", 0.0)))
 
     include_gridcost = bool(costs.get("include_gridcost_in_energy", False))
-    include_demand = bool(costs.get("include_demand_charge_in_rh", True))
+    include_demand = bool(grid.get("include_demand_charge_in_rh", costs.get("include_demand_charge_in_rh", True)))
     include_co2 = bool(costs.get("include_co2_cost_in_objective", True))
 
     fuels = cfg.get("fuels", {})
@@ -225,6 +233,7 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
 
     m.P_buy = pyo.Var(m.t, domain=pyo.NonNegativeReals)
     m.P_sell = pyo.Var(m.t, domain=pyo.NonNegativeReals)
+    m.grid_mode = pyo.Var(m.t, domain=pyo.Binary)
     m.Q_dump = pyo.Var(m.t, domain=pyo.NonNegativeReals)
 
     el_in: List = []
@@ -446,12 +455,34 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
         rule=lambda mm, t: sum((f[t] for f in ht_out), start=0) + sum((f[t] for f in ht_in), start=0) == mm.heatd[t] + mm.Q_dump[t],
     )
 
-    if include_gridcost:
-        buy_price = [table["strompreis_EUR_MWh"][i] + float(m.energy_fee.value) for i in range(T)]
-    else:
-        buy_price = table["strompreis_EUR_MWh"]
+    m.buy_gate = pyo.Constraint(m.t, rule=lambda mm, t: mm.P_buy[t] <= mm.grid_mode[t] * mm.M_GRID)
+    m.sell_gate = pyo.Constraint(m.t, rule=lambda mm, t: mm.P_sell[t] <= (1 - mm.grid_mode[t]) * mm.M_GRID)
 
-    energy_cost = sum(dt_h * (m.P_buy[t] * bp - m.P_sell[t] * table["strompreis_EUR_MWh"][t - 1]) for t, bp in zip(m.t, buy_price))
+    base_prices = [float(table["strompreis_EUR_MWh"][i]) for i in range(T)]
+    if include_gridcost:
+        addition = float(m.energy_fee.value) + float(m.grid_cost.value)
+    else:
+        addition = 0.0
+    buy_price = [bp + addition for bp in base_prices]
+
+    floor = float(m.sell_floor.value)
+    haircut = float(m.sell_haircut.value)
+    spread = float(m.sell_spread.value)
+    fee = float(m.sell_fee.value)
+    premium = float(m.sell_premium.value)
+
+    def _sell_price(base: float) -> float:
+        price = max(base - spread, floor)
+        price = price * max(0.0, 1.0 - haircut)
+        price = price - fee + premium
+        return max(price, 0.0)
+
+    sell_price = [_sell_price(bp) for bp in base_prices]
+
+    energy_cost = sum(
+        dt_h * (m.P_buy[t] * buy_price[idx] - m.P_sell[t] * sell_price[idx])
+        for idx, t in enumerate(m.t)
+    )
     dump_cost = m.dump_cost * sum(m.Q_dump[t] * dt_h for t in m.t)
     fuel_costs = sum(fuel_cost_terms) if fuel_cost_terms else 0
     co2_grid = sum(m.P_buy[t] * table["grid_co2_kg_MWh"][t - 1] * dt_h for t in m.t)
@@ -460,7 +491,7 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
 
     m.P_buy_peak = pyo.Var(domain=pyo.NonNegativeReals)
     m.peak_con = pyo.Constraint(m.t, rule=lambda mm, t: mm.P_buy_peak >= mm.P_buy[t])
-    demand_term = (m.demand_charge_y * period_frac * m.P_buy_peak) if include_demand else 0
+    demand_term = (m.demand_charge_y * m.year_frac * m.P_buy_peak) if include_demand else 0
 
     capex_total = sum(capex_terms) if capex_terms else 0
     activation_total = sum(activation_terms) if activation_terms else 0

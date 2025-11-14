@@ -210,6 +210,9 @@ def _collect_timeseries_and_summary(
 ) -> tuple[OrderedDict[str, List[float]], OrderedDict[str, OrderedDict[str, Any]], Dict[str, Any]]:
     meta = _gather_component_metadata(cfg)
     n = len(table)
+    grid_cfg = cfg.get("grid", {})
+    period_fraction = float(n * dt_h / 8760.0) if n else 0.0
+    demand_year_fraction = float(grid_cfg.get("year_fraction", period_fraction))
 
     series: OrderedDict[str, List[float]] = OrderedDict()
     series["P_buy_MW"] = [0.0] * n
@@ -258,7 +261,8 @@ def _collect_timeseries_and_summary(
             ("Capex_cost_EUR", 0.0),
             ("Activation_cost_EUR", 0.0),
             ("Tie_breaker_cost_EUR", 0.0),
-            ("Period_fraction_of_year", float(n * dt_h / 8760.0) if n else 0.0),
+            ("Period_fraction_of_year", period_fraction),
+            ("Demand_charge_year_fraction", demand_year_fraction),
             ("Objective_residual_EUR", 0.0),
         ]
     )
@@ -355,22 +359,40 @@ def _collect_timeseries_and_summary(
     demand_series = table.data.get("waermebedarf_MWth", [0.0] * n)
 
     include_gridcost = bool(cfg.get("costs", {}).get("include_gridcost_in_energy", False))
-    energy_fee = float(cfg.get("grid", {}).get("energy_fee_eur_mwh", 0.0)) if include_gridcost else 0.0
+    energy_fee = float(grid_cfg.get("energy_fee_eur_mwh", 0.0))
+    grid_cost = float(grid_cfg.get("gridcost_eur_mwh", 0.0))
     include_co2 = bool(cfg.get("costs", {}).get("include_co2_cost_in_objective", True))
     dump_cost_rate = float(cfg.get("costs", {}).get("dump_cost_eur_per_mwh_th", 0.0))
-    include_demand = bool(cfg.get("costs", {}).get("include_demand_charge_in_rh", True))
-    demand_charge_rate = float(cfg.get("grid", {}).get("demand_charge_eur_per_mw_y", 0.0))
+    include_demand = bool(grid_cfg.get("include_demand_charge_in_rh", cfg.get("costs", {}).get("include_demand_charge_in_rh", True)))
+    demand_charge_rate = float(grid_cfg.get("demand_charge_eur_per_mw_y", 0.0))
+
+    sell_floor = float(grid_cfg.get("sell_floor_eur_mwh", 0.0))
+    sell_haircut = float(grid_cfg.get("sell_haircut_fraction", 0.0))
+    sell_spread = float(grid_cfg.get("sell_spread_eur_mwh", 0.0))
+    sell_fee = float(grid_cfg.get("sell_fee_eur_mwh", 0.0))
+    sell_premium = float(grid_cfg.get("sell_premium_eur_mwh", 0.0))
 
     pbuy_series = series["P_buy_MW"]
     psell_series = series["P_sell_MW"]
     qdump_series = series["Q_dump_MWth"]
 
+    addition = (energy_fee + grid_cost) if include_gridcost else 0.0
+
+    def _sell_price(base: float) -> float:
+        price = max(base - sell_spread, sell_floor)
+        price = price * max(0.0, 1.0 - sell_haircut)
+        price = price - sell_fee + sell_premium
+        return max(price, 0.0)
+
+    buy_prices = [price_series[i] + addition for i in range(n)] if n else []
+    sell_prices = [_sell_price(price_series[i]) for i in range(n)] if n else []
+
     energy_in = float(sum(pbuy_series) * dt_h)
     energy_out = float(sum(psell_series) * dt_h)
     heat_dump = float(sum(qdump_series) * dt_h)
 
-    energy_cost = float(sum((pbuy_series[i] * (price_series[i] + energy_fee) * dt_h) for i in range(n))) if n else 0.0
-    energy_revenue = float(sum((psell_series[i] * price_series[i] * dt_h) for i in range(n))) if n else 0.0
+    energy_cost = float(sum((pbuy_series[i] * buy_prices[i] * dt_h) for i in range(n))) if n else 0.0
+    energy_revenue = float(sum((psell_series[i] * sell_prices[i] * dt_h) for i in range(n))) if n else 0.0
     grid_co2_t = float(sum((pbuy_series[i] * grid_co2_series[i] * dt_h) for i in range(n)) / 1000.0) if n else 0.0
 
     heat_demand_mwh = float(sum(demand_series) * dt_h) if n else 0.0
@@ -547,7 +569,7 @@ def _collect_timeseries_and_summary(
         else:
             peak = float(max(pbuy_series, default=0.0))
         objective["P_buy_peak_MW"] = peak
-        demand_cost = float(demand_charge_rate * objective["Period_fraction_of_year"] * peak)
+        demand_cost = float(demand_charge_rate * demand_year_fraction * peak)
     else:
         objective["P_buy_peak_MW"] = float(max(pbuy_series, default=0.0))
 
