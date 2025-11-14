@@ -1,36 +1,48 @@
-import pytest, os
+from datetime import datetime, timedelta
+import os
+
+import pytest
+
 try:
     import pyomo.environ as pyo
-    HAVE_PYOMO=True
+    HAVE_PYOMO = True
 except Exception:
-    HAVE_PYOMO=False
+    HAVE_PYOMO = False
 
 from energis.config.merge import load_and_merge
 from energis.io.loader import load_input_excel
 from energis.models.system_builder import build_model
-import pandas as pd
+from energis.utils.xlsx import write_simple_xlsx
+
+
+def _date_range(start: str, periods: int, freq_hours: int = 1):
+    base = datetime.fromisoformat(start)
+    return [base + timedelta(hours=freq_hours * i) for i in range(periods)]
 
 @pytest.mark.skipif(not HAVE_PYOMO, reason="Pyomo not available")
 def test_bus_constraints_exist(tmp_path):
     # minimal data
     xls = tmp_path/"Import_Data.xlsx"
-    idx = pd.date_range("2023-01-01 00:00", periods=3, freq="H")
-    df = pd.DataFrame({
-        "Datum": idx,
-        "Day_Ahead_Price €/MWh": [50,55,60],
-        "Wärmebedarf MW": [10,10,10],
-        "CO2_consumption_based kgCO2/MWh": [350,350,350],
-        "WRG1Q MW":[2,2,2],
-        "WRG1_T °C":[50,50,50],
-        "WRG2Q MW":[1,1,1],
-        "WRG2_T °C":[45,45,45],
-        "WRG3Q MW":[0,0,0],
-        "WRG3_T °C":[40,40,40],
-        "WRG4Q MW":[0,0,0],
-        "WRG4_T °C":[35,35,35],
-    })
-    with pd.ExcelWriter(xls) as xw:
-        df.to_excel(xw, index=False)
+    idx = _date_range("2023-01-01T00:00:00", periods=3)
+    headers = [
+        "Datum",
+        "Day_Ahead_Price €/MWh",
+        "Wärmebedarf MW",
+        "CO2_consumption_based kgCO2/MWh",
+        "WRG1Q MW",
+        "WRG1_T °C",
+        "WRG2Q MW",
+        "WRG2_T °C",
+        "WRG3Q MW",
+        "WRG3_T °C",
+        "WRG4Q MW",
+        "WRG4_T °C",
+    ]
+    rows = [
+        [idx[i], 50 + 5 * i, 10, 350, 2, 50, 1, 45, 0, 40, 0, 35]
+        for i in range(len(idx))
+    ]
+    write_simple_xlsx(str(xls), headers, rows)
 
     cfg = load_and_merge([
         "configs/base.yaml",

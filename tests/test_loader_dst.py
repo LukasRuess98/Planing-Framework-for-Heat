@@ -1,7 +1,15 @@
+from datetime import datetime, timedelta
+
 import pytest
+
 from energis.config.merge import load_and_merge
 from energis.io.loader import load_input_excel
-import pandas as pd
+from energis.utils.xlsx import write_simple_xlsx
+
+
+def _date_range(start: str, periods: int, freq_hours: int = 1):
+    base = datetime.fromisoformat(start)
+    return [base + timedelta(hours=freq_hours * i) for i in range(periods)]
 
 def test_merge_and_loader_smoke(tmp_path):
     # minimal merge smoke test
@@ -16,23 +24,26 @@ def test_merge_and_loader_smoke(tmp_path):
 
     # synthesize tiny excel to check DST pipeline (no pyomo needed)
     xls = tmp_path/"Import_Data.xlsx"
-    idx = pd.date_range("2023-03-26 00:00", periods=6, freq="H")  # EU DST change happens around this date
-    df = pd.DataFrame({
-        "Datum": idx,
-        "Day_Ahead_Price €/MWh": [50,52,48,47,49,55],
-        "Wärmebedarf MW": [10,10,10,10,10,10],
-        "CO2_consumption_based kgCO2/MWh": [350,360,340,330,335,345],
-        "WRG1Q MW":[2,2,2,2,2,2],
-        "WRG1_T °C":[50,50,50,50,50,50],
-        "WRG2Q MW":[1,1,1,1,1,1],
-        "WRG2_T °C":[45,45,45,45,45,45],
-        "WRG3Q MW":[0,0,0,0,0,0],
-        "WRG3_T °C":[40,40,40,40,40,40],
-        "WRG4Q MW":[0,0,0,0,0,0],
-        "WRG4_T °C":[35,35,35,35,35,35],
-    })
-    with pd.ExcelWriter(xls) as xw:
-        df.to_excel(xw, index=False)
+    idx = _date_range("2023-03-26T00:00:00", periods=6)
+    headers = [
+        "Datum",
+        "Day_Ahead_Price €/MWh",
+        "Wärmebedarf MW",
+        "CO2_consumption_based kgCO2/MWh",
+        "WRG1Q MW",
+        "WRG1_T °C",
+        "WRG2Q MW",
+        "WRG2_T °C",
+        "WRG3Q MW",
+        "WRG3_T °C",
+        "WRG4Q MW",
+        "WRG4_T °C",
+    ]
+    rows = [
+        [idx[i], 50 + i % 3, 10, 340 + 5 * (i % 3), 2, 50, 1, 45, 0, 40, 0, 35]
+        for i in range(len(idx))
+    ]
+    write_simple_xlsx(str(xls), headers, rows)
 
     cfg["site"]["input_xlsx"] = str(xls)
     data = load_input_excel(cfg["site"]["input_xlsx"], cfg["site"], dt_hours=1.0)

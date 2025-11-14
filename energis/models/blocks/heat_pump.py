@@ -1,6 +1,11 @@
 from __future__ import annotations
+
 from typing import Dict, Any, List
-import pyomo.environ as pyo
+
+try:  # pragma: no cover - optional dependency
+    import pyomo.environ as pyo
+except Exception:  # pragma: no cover
+    pyo = None
 
 class HeatPumpBlock:
     def __init__(self, name: str, max_th_mw: float, min_load: float, COP_series: List[float]):
@@ -10,6 +15,8 @@ class HeatPumpBlock:
         self.COP_series = [float(c) for c in COP_series]
 
     def attach(self, m, Tset, cfg, buses):
+        if pyo is None:
+            raise RuntimeError("Pyomo is required to attach blocks")
         # Create variables
         comp = self.name
         setattr(m, f"{comp}_Q", pyo.Var(Tset, domain=pyo.NonNegativeReals))  # heat out
@@ -41,3 +48,4 @@ class HeatPumpBlock:
 
         # Flows to buses
         return {"Q_th_out": Q, "P_el_in": Pel}
+
