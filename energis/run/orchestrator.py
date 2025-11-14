@@ -221,6 +221,9 @@ def _collect_timeseries_and_summary(
         series[f"{comp}_Q_th_MW"] = [0.0] * n
         series[f"{comp}_Pel_MW"] = [0.0] * n
         series[f"{comp}_on"] = [0.0] * n
+        series[f"{comp}_Q_wrg_MW"] = [0.0] * n
+        series[f"{comp}_Q_def_MW"] = [0.0] * n
+        series[f"{comp}_COP"] = [0.0] * n
 
     if meta["storage"]:
         series["TES_SOC_MWh"] = [0.0] * n
@@ -321,6 +324,8 @@ def _collect_timeseries_and_summary(
             _extract(getattr(model, f"{comp}_Q", None), f"{comp}_Q_th_MW")
             _extract(getattr(model, f"{comp}_Pel", None), f"{comp}_Pel_MW")
             _extract(getattr(model, f"{comp}_on", None), f"{comp}_on")
+            _extract(getattr(model, f"{comp}_Q_wrg", None), f"{comp}_Q_wrg_MW")
+            _extract(getattr(model, f"{comp}_Q_def", None), f"{comp}_Q_def_MW")
 
         if meta["storage"]:
             _extract(getattr(model, "TES_E", None), "TES_SOC_MWh")
@@ -401,6 +406,13 @@ def _collect_timeseries_and_summary(
         heat_series = series[f"{comp}_Q_th_MW"]
         pel_series = series[f"{comp}_Pel_MW"]
         on_series = series[f"{comp}_on"]
+        cop_series = []
+        for heat, pel in zip(heat_series, pel_series):
+            if pel > 1e-9:
+                cop_series.append(float(heat / pel))
+            else:
+                cop_series.append(0.0)
+        series[f"{comp}_COP"] = cop_series
         heat_mwh = float(sum(heat_series) * dt_h)
         pel_mwh = float(sum(pel_series) * dt_h)
         on_hours = float(sum(on_series) * dt_h)
@@ -420,6 +432,7 @@ def _collect_timeseries_and_summary(
                 except Exception:  # pragma: no cover - defensive
                     build_value = 1.0 if cap_value > 0 else 0.0
         full_load = float((heat_mwh / cap_value) if cap_value > 1e-9 else 0.0)
+        avg_cop = float((heat_mwh / pel_mwh) if pel_mwh > 1e-9 else 0.0)
         heat_pump_sections[f"heat_pump_{comp}"] = OrderedDict(
             [
                 ("Heat_output_MWh", heat_mwh),
@@ -433,6 +446,7 @@ def _collect_timeseries_and_summary(
                     "Capacity_bounds_MW",
                     [hp.get("cap_min", 0.0), hp.get("cap_max", hp.get("max_th", cap_value))],
                 ),
+                ("Average_COP", avg_cop),
             ]
         )
 
@@ -757,6 +771,13 @@ def run_all(config_paths: List[str], overrides: Optional[Dict[str, Any]] = None)
     else:
         metadata_sections["site"] = OrderedDict(value=site)
     metadata_sections["solver"] = solver_meta
+
+    heat_pump_meta = OrderedDict()
+    for section, metrics in summary_sections.items():
+        if section.startswith("heat_pump_"):
+            heat_pump_meta[section] = OrderedDict(metrics)
+    if heat_pump_meta:
+        metadata_sections["components_heat_pumps"] = heat_pump_meta
 
     xlsx_file = os.path.join(outdir, "scenario_results.xlsx")
     try:

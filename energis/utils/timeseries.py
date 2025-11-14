@@ -39,6 +39,9 @@ class TimeSeriesTable:
     def __getitem__(self, key: str) -> List[float]:
         return self.data[key]
 
+    def __contains__(self, key: str) -> bool:
+        return key in self.data
+
     def as_rows(self) -> Iterator[Dict[str, float]]:
         for i in range(len(self.index)):
             yield {col: self.data[col][i] for col in self.columns}
