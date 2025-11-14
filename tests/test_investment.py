@@ -96,11 +96,14 @@ def test_heat_pump_investment_costs():
     assert objective["Activation_cost_EUR"] == pytest.approx(activation)
     assert objective["Tie_breaker_cost_EUR"] == pytest.approx(tie)
     assert objective["Objective_residual_EUR"] == pytest.approx(0.0)
+    assert series["HP_INV_COP"] == pytest.approx([0.0])
     hp_section = summary["heat_pump_HP_INV"]
     assert hp_section["Thermal_capacity_MW"] == pytest.approx(4.0)
     assert hp_section["Build_binary"] == pytest.approx(1.0)
     assert hp_section["Investment_enabled"] is True
+    assert hp_section["Average_COP"] == pytest.approx(0.0)
     assert flat["objective.Capex_cost_EUR"] == pytest.approx(capex)
+    assert flat["heat_pump_HP_INV.Average_COP"] == pytest.approx(0.0)
 
 
 @pytest.mark.skipif(not HAVE_PYOMO, reason="Pyomo not available")
