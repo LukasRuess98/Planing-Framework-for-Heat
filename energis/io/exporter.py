@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from datetime import date, datetime
+from numbers import Number
 from typing import Iterable, Mapping, Sequence
-from datetime import datetime
 import json
 
 from energis.utils.timeseries import TimeSeriesTable
@@ -49,10 +50,36 @@ def _fmt_value(value: object) -> str:
     return str(value)
 
 
+def _normalize_excel_value(value: object) -> object:
+    """Convert arbitrary values into a representation accepted by openpyxl."""
+
+    if value is None:
+        return None
+
+    if isinstance(value, (str, Number, bool)):
+        return value
+
+    if isinstance(value, datetime):
+        return value
+
+    if isinstance(value, date):
+        # openpyxl expects datetime for date-like objects
+        return datetime.combine(value, datetime.min.time())
+
+    iso_formatter = getattr(value, "isoformat", None)
+    if callable(iso_formatter):
+        try:
+            return iso_formatter()
+        except Exception:
+            pass
+
+    return str(value)
+
+
 def _append_table(ws, headers: Sequence[str], rows: Iterable[Sequence[object]]) -> None:
-    ws.append(list(headers))
+    ws.append([_normalize_excel_value(header) for header in headers])
     for row in rows:
-        ws.append(list(row))
+        ws.append([_normalize_excel_value(value) for value in row])
 
 
 def write_excel_workbook(
@@ -102,20 +129,25 @@ def write_excel_workbook(
 
     summary_ws = wb.create_sheet("summary")
     for section, metrics in summary_sections.items():
-        summary_ws.append([section])
+        summary_ws.append([_normalize_excel_value(section)])
         for key, value in metrics.items():
-            summary_ws.append([key, value])
+            summary_ws.append(
+                [_normalize_excel_value(key), _normalize_excel_value(value)]
+            )
         summary_ws.append([])
 
     if metadata_sections:
         meta_ws = wb.create_sheet("metadata")
         for section, entries in metadata_sections.items():
-            meta_ws.append([section])
+            meta_ws.append([_normalize_excel_value(section)])
             for key, value in entries.items():
                 if isinstance(value, (dict, list)):
-                    meta_ws.append([key, json.dumps(value, ensure_ascii=False)])
+                    normalized_value = json.dumps(value, ensure_ascii=False)
                 else:
-                    meta_ws.append([key, value])
+                    normalized_value = _normalize_excel_value(value)
+                meta_ws.append(
+                    [_normalize_excel_value(key), _normalize_excel_value(normalized_value)]
+                )
             meta_ws.append([])
 
     wb.save(path)
