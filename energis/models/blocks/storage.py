@@ -1,5 +1,9 @@
 from __future__ import annotations
-import pyomo.environ as pyo
+
+try:  # pragma: no cover - optional dependency
+    import pyomo.environ as pyo
+except Exception:  # pragma: no cover
+    pyo = None
 
 class StorageBlock:
     def __init__(self, name: str, e_min, e_max, p_max, eff_c, eff_d, hourly_loss, dt_h, soc0):
@@ -12,6 +16,8 @@ class StorageBlock:
         self.soc0 = float(soc0)
 
     def attach(self, m, Tset, cfg, buses):
+        if pyo is None:
+            raise RuntimeError("Pyomo is required to attach blocks")
         comp = self.name
         setattr(m, f"{comp}_E", pyo.Var(Tset, domain=pyo.NonNegativeReals))
         setattr(m, f"{comp}_Qc", pyo.Var(Tset, domain=pyo.NonNegativeReals))  # charge heat in
@@ -44,3 +50,4 @@ class StorageBlock:
         setattr(m, f"{comp}_soc", pyo.Constraint(Tset, rule=soc_dyn))
 
         return {"Q_th_out": Qd, "Q_th_in": Qc, "SOC": E}
+

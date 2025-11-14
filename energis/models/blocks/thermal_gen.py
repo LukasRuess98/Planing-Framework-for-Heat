@@ -1,5 +1,9 @@
 from __future__ import annotations
-import pyomo.environ as pyo
+
+try:  # pragma: no cover - optional dependency
+    import pyomo.environ as pyo
+except Exception:  # pragma: no cover
+    pyo = None
 
 class ThermalGeneratorBlock:
     def __init__(self, name: str, th_eff: float, el_eff: float | None, cap_th_mw: float):
@@ -9,6 +13,8 @@ class ThermalGeneratorBlock:
         self.cap_th = float(cap_th_mw)
 
     def attach(self, m, Tset, cfg, buses):
+        if pyo is None:
+            raise RuntimeError("Pyomo is required to attach blocks")
         comp = self.name
         setattr(m, f"{comp}_Qth", pyo.Var(Tset, domain=pyo.NonNegativeReals))
         setattr(m, f"{comp}_fuel", pyo.Var(Tset, domain=pyo.NonNegativeReals))
@@ -33,3 +39,4 @@ class ThermalGeneratorBlock:
             Pel = Pelv
 
         return {"Q_th_out": Qth, "fuel_in": fuel, "P_el_out": Pel}
+

@@ -1,11 +1,17 @@
 from __future__ import annotations
-import pyomo.environ as pyo
+
+try:  # pragma: no cover - optional dependency
+    import pyomo.environ as pyo
+except Exception:  # pragma: no cover
+    pyo = None
 
 class P2HBlock:
     def __init__(self, name: str, eff: float, cap_th_mw: float):
         self.name = name; self.eff = float(eff); self.cap = float(cap_th_mw)
 
     def attach(self, m, Tset, cfg, buses):
+        if pyo is None:
+            raise RuntimeError("Pyomo is required to attach blocks")
         comp = self.name
         setattr(m, f"{comp}_Qth", pyo.Var(Tset, domain=pyo.NonNegativeReals))
         setattr(m, f"{comp}_Pel", pyo.Var(Tset, domain=pyo.NonNegativeReals))
@@ -18,3 +24,4 @@ class P2HBlock:
         setattr(m, f"{comp}_capcons", pyo.Constraint(Tset, rule=cap_rule))
         setattr(m, f"{comp}_link",    pyo.Constraint(Tset, rule=link))
         return {"Q_th_out": Q, "P_el_in": P}
+

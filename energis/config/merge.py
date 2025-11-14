@@ -1,6 +1,11 @@
 from __future__ import annotations
-import os, copy, hashlib, yaml
+
+import os
+import copy
+import hashlib
 from typing import List, Dict, Any
+
+from energis.utils import simple_yaml
 
 def _deep_merge(a: dict, b: dict) -> dict:
     out = copy.deepcopy(a)
@@ -12,8 +17,18 @@ def _deep_merge(a: dict, b: dict) -> dict:
     return out
 
 def load_yaml(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+    """Load YAML using the light-weight parser.
+
+    PyYAML is not available in the execution environment.  The configuration
+    files only rely on a tiny subset of the YAML specification, therefore we
+    can use :mod:`energis.utils.simple_yaml` which is purposely written for this
+    repository.
+    """
+
+    data = simple_yaml.load(path)
+    if not isinstance(data, dict):
+        raise TypeError(f"Expected mapping at document root in {path!r}.")
+    return data
 
 def load_and_merge(paths: List[str]) -> Dict[str,Any]:
     cfg = {}
