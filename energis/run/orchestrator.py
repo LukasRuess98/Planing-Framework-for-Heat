@@ -21,6 +21,7 @@ except Exception:  # pragma: no cover
 from energis.config.merge import load_and_merge
 from energis.io.loader import load_input_excel
 from energis.io.exporter import write_timeseries_csv, write_excel_workbook
+from energis.io.plotter import export_plots
 from energis.models.system_builder import build_model
 from energis.utils.timeseries import TimeSeriesTable
 
@@ -616,6 +617,12 @@ def run_all(config_paths: List[str], overrides: Optional[Dict[str, Any]] = None)
         print(f"[EXPORT] Excel-Export übersprungen: {exc}")
         xlsx_file = None
 
+    try:
+        plot_files = export_plots(outdir, table, series, summary_sections)
+    except Exception as exc:  # pragma: no cover - plotting is optional
+        print(f"[EXPORT] Diagramm-Export übersprungen: {exc}")
+        plot_files = []
+
     summary_json = _json_safe({section: dict(metrics) for section, metrics in summary_sections.items()})
     metadata_json = _json_safe({section: dict(entries) for section, entries in metadata_sections.items()})
 
@@ -639,6 +646,7 @@ def run_all(config_paths: List[str], overrides: Optional[Dict[str, Any]] = None)
         "summary": summary_json,
         "metadata": metadata_json,
         "scenario": scenario_cfg,
+        "plots": plot_files,
     }
 
 def _extract_pyomo_series(var: Any, times: Sequence[Any], name: str, tolerance: float = 1e-9) -> List[float]:
