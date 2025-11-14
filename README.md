@@ -21,6 +21,16 @@ It keeps the structure close to oemof/pypsa (configs, components, buses, orchest
    ```bash
    python quickstart_test.py
    ```
-4. Or open `notebooks/01_scenario_studio.ipynb` and run.
+4. Execute a configurable PF/RH workflow without writing exports:
+   ```bash
+   python -m energis.run.rolling_horizon \
+       configs/base.yaml \
+       configs/tech_catalog.yaml \
+       configs/sites/default.site.yaml \
+       configs/systems/baseline.system.yaml \
+      configs/scenarios/pf_then_rh.scenario.yaml \
+       --print-design
+   ```
+5. Or open `notebooks/01_scenario_studio.ipynb` and run.
 
 Exports go to `exports/<timestamp>_<tag>/scenario.xlsx`.
