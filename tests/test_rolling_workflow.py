@@ -90,7 +90,7 @@ def test_pf_only_workflow(monkeypatch: pytest.MonkeyPatch, simple_config: dict) 
 def test_rh_only_workflow_aggregates(monkeypatch: pytest.MonkeyPatch, simple_config: dict) -> None:
     config = copy.deepcopy(simple_config)
     config["scenario"] = {
-        "run_mode": "RH_ONLY",
+        "workflow": ["RH"],
         "rolling_horizon": {"heat_horizon_hours": 4.0, "step_hours": 2.0, "terminal_policy": "free"},
     }
 
@@ -203,4 +203,85 @@ def test_pf_then_rh_fix_design(monkeypatch: pytest.MonkeyPatch, simple_config: d
     assert result.rh_result.series["TES_SOC_MWh"] == [0.0, 1.0, 1.0, 2.0, 2.0]
     assert result.design.heat_pumps["HP1"]["capacity_mw"] == pytest.approx(5.0)
     assert result.design.storage["power_mw"] == pytest.approx(5.0)
+
+
+def test_custom_workflow_sequence(monkeypatch: pytest.MonkeyPatch, simple_config: dict) -> None:
+    config = copy.deepcopy(simple_config)
+    config["scenario"] = {
+        "workflow": ["PF", "RH"],
+        "fix_design": False,
+        "rolling_horizon": {"HEAT_HORIZON_HOURS": 4.0, "STEP_HOURS": 2.0},
+    }
+
+    table = _make_table(4)
+    monkeypatch.setattr(rh, "load_input_excel", lambda *args, **kwargs: table)
+
+    pf_summary = OrderedDict(
+        {
+            "objective": OrderedDict(),
+            "heat_pump_HP1": OrderedDict(
+                [
+                    ("Thermal_capacity_MW", 5.0),
+                    ("Build_binary", 1.0),
+                ]
+            ),
+        }
+    )
+
+    call_state = {"idx": 0}
+
+    def fake_solve(table_arg, cfg, dt_h, solver_name):
+        idx = call_state["idx"]
+        call_state["idx"] += 1
+        if idx == 0:
+            series = OrderedDict({"TES_SOC_MWh": [0.0] * len(table_arg)})
+            return rh.ScenarioResult(table_arg, series, pf_summary, {}, {})
+        hp_cfg = cfg["system"]["heat_pumps"][0]
+        # Design fixation is disabled
+        assert hp_cfg.get("investment", {}).get("enabled", True) is True
+        series = OrderedDict({"TES_SOC_MWh": [0.0] * len(table_arg)})
+        return rh.ScenarioResult(table_arg, series, {}, {}, {})
+
+    monkeypatch.setattr(rh, "_solve_scenario", fake_solve)
+
+    result = rh.run_workflow([], overrides=config)
+
+    assert result.pf_result is not None
+    assert result.rh_result is not None
+
+
+def test_workflow_accepts_string(monkeypatch: pytest.MonkeyPatch, simple_config: dict) -> None:
+    config = copy.deepcopy(simple_config)
+    config["scenario"] = {"workflow": "PF"}
+
+    table = _make_table(2)
+    monkeypatch.setattr(rh, "load_input_excel", lambda *args, **kwargs: table)
+
+    def fake_solve(table_arg, cfg, dt_h, solver_name):
+        series = OrderedDict({"TES_SOC_MWh": [0.0] * len(table_arg)})
+        summary = OrderedDict({"objective": OrderedDict()})
+        return rh.ScenarioResult(table_arg, series, summary, {}, {})
+
+    monkeypatch.setattr(rh, "_solve_scenario", fake_solve)
+
+    result = rh.run_workflow([], overrides=config)
+    assert result.pf_result is not None
+
+
+def test_unknown_workflow_step(monkeypatch: pytest.MonkeyPatch, simple_config: dict) -> None:
+    config = copy.deepcopy(simple_config)
+    config["scenario"] = {"workflow": ["PF", "UNKNOWN"]}
+
+    table = _make_table(2)
+    monkeypatch.setattr(rh, "load_input_excel", lambda *args, **kwargs: table)
+
+    def fake_solve(table_arg, cfg, dt_h, solver_name):
+        series = OrderedDict({"TES_SOC_MWh": [0.0] * len(table_arg)})
+        summary = OrderedDict({"objective": OrderedDict()})
+        return rh.ScenarioResult(table_arg, series, summary, {}, {})
+
+    monkeypatch.setattr(rh, "_solve_scenario", fake_solve)
+
+    with pytest.raises(ValueError):
+        rh.run_workflow([], overrides=config)
 

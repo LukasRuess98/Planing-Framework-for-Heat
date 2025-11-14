@@ -1,11 +1,12 @@
 """Workflow helpers for rolling horizon simulations.
 
 The module implements a lightweight orchestration layer around the existing
-`energis.run.orchestrator` utilities.  It allows callers to run a perfect
-forecast (PF) optimisation once and optionally execute a rolling horizon (RH)
-simulation afterwards.  The RH logic honours configuration entries for window
-size, step width and terminal policies while preserving state-of-charge (SOC)
-values between windows.
+`energis.run.orchestrator` utilities.  Callers can describe a sequence of
+workflow steps via ``scenario.workflow`` (e.g. ``["PF", "RH"]``) or the legacy
+``run_mode`` switch.  This makes it trivial to compare PF-only, RH-only and
+combined PF→RH simulations while reusing the same configuration set.  The RH
+logic honours configuration entries for window size, step width and terminal
+policies while preserving state-of-charge (SOC) values between windows.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 import copy
 import math
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
 try:  # pragma: no cover - optional dependency
     import pyomo.environ as pyo
@@ -78,6 +79,14 @@ class WorkflowResult:
 
 
 @dataclass
+class _WorkflowPlan:
+    """Internal representation of the requested workflow."""
+
+    steps: Sequence[str]
+    fix_design: bool
+
+
+@dataclass
 class _RollingParams:
     """Internal helper capturing rolling horizon parameters."""
 
@@ -122,39 +131,64 @@ def run_workflow(config_paths: List[str], overrides: Optional[Dict[str, Any]] = 
     table = orchestrator._apply_horizon(table, scenario_cfg, dt_h)  # type: ignore[attr-defined]
     orchestrator._assert_capacity_vs_demand(table, cfg)  # type: ignore[attr-defined]
 
-    run_mode = str(scenario_cfg.get("run_mode", "PF_ONLY")).upper()
+    plan = _parse_workflow_plan(scenario_cfg)
     solver_name = str(run_cfg.get("solver", "glpk"))
 
     pf_result: Optional[ScenarioResult] = None
+    rh_result: Optional[RollingHorizonResult] = None
     design: Optional[DesignData] = None
 
-    if run_mode in {"PF_ONLY", "PF_THEN_RH", "PF_AND_RH"}:
-        pf_result = _solve_scenario(table, cfg, dt_h, solver_name)
-        design = _extract_design_data(pf_result.summary)
-        if run_mode == "PF_ONLY":
-            return WorkflowResult(cfg, pf_result, None, design)
-
-    if run_mode not in {"RH_ONLY", "PF_THEN_RH", "PF_AND_RH"}:
-        # Nothing else to do.
-        return WorkflowResult(cfg, pf_result, None, design)
-
-    params = _load_rolling_params(cfg)
-    horizon_steps, step_steps = params.as_steps(dt_h)
-
-    fix_design = run_mode in {"PF_THEN_RH", "PF_AND_RH"} and design is not None
-    rh_result = _run_rolling_horizon(
-        cfg,
-        table,
-        dt_h,
-        solver_name,
-        params,
-        horizon_steps,
-        step_steps,
-        design,
-        fix_design,
-    )
+    for step in plan.steps:
+        if step == "PF":
+            pf_result = _solve_scenario(table, cfg, dt_h, solver_name)
+            design = _extract_design_data(pf_result.summary)
+        elif step == "RH":
+            params = _load_rolling_params(cfg)
+            horizon_steps, step_steps = params.as_steps(dt_h)
+            fix_design = plan.fix_design and design is not None
+            rh_result = _run_rolling_horizon(
+                cfg,
+                table,
+                dt_h,
+                solver_name,
+                params,
+                horizon_steps,
+                step_steps,
+                design,
+                fix_design,
+            )
+        else:
+            raise ValueError(f"Unsupported workflow step: {step}")
 
     return WorkflowResult(cfg, pf_result, rh_result, design)
+
+
+def _parse_workflow_plan(scenario_cfg: Mapping[str, Any]) -> _WorkflowPlan:
+    run_mode = str(scenario_cfg.get("run_mode", "")).strip().upper() or "PF_ONLY"
+    workflow = scenario_cfg.get("workflow")
+
+    if workflow is not None:
+        if isinstance(workflow, (str, bytes)):
+            steps = [str(workflow)]
+        else:
+            steps = list(workflow)
+        steps_upper = [str(step).strip().upper() for step in steps if str(step).strip()]
+    else:
+        mapping = {
+            "PF_ONLY": ["PF"],
+            "RH_ONLY": ["RH"],
+            "PF_THEN_RH": ["PF", "RH"],
+            "PF_AND_RH": ["PF", "RH"],
+        }
+        steps_upper = mapping.get(run_mode, ["PF"])
+
+    if not steps_upper:
+        raise ValueError("Workflow must contain at least one step")
+
+    fix_default = run_mode in {"PF_THEN_RH", "PF_AND_RH"}
+    fix_design = bool(scenario_cfg.get("fix_design", scenario_cfg.get("fix_design_in_rh", fix_default)))
+
+    return _WorkflowPlan(steps=steps_upper, fix_design=fix_design)
 
 
 def _run_rolling_horizon(
