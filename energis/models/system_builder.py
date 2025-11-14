@@ -7,8 +7,6 @@ try:
 except Exception:
     HAVE_PYOMO = False
     pyo = None
-from pyomo.environ import Reference  # ggf. oben einmalig importieren
-
 
 from .blocks.heat_pump import HeatPumpBlock
 from .blocks.storage   import StorageBlock
@@ -31,10 +29,8 @@ def _cop_series_from_df(df: pd.DataFrame, wrg_col: str | None, cfg: Dict[str,Any
         Tin = pd.Series(Ts_in - 10.0, index=df.index)
     Tout = (Tin - dT).clip(lower=1.0)
     # compute COP
-    import numpy as np
     def _lmtd(Th, Tc):
         d1 = max(float(Th) - float(Tc), 1e-6)
-        import math
         return d1 / max(abs(np.log(max(Th-1e-9, Th)/max(Tc+1e-9, Tc))), 1e-6)
     Ls = _lmtd(Ts_out, Ts_in)
     cop = []
@@ -87,7 +83,7 @@ def build_model(df: pd.DataFrame, cfg: Dict[str,Any], dt_h: float = 1.0):
     m.P_sell = pyo.Var(m.t, domain=pyo.NonNegativeReals)
     m.Q_dump = pyo.Var(m.t, domain=pyo.NonNegativeReals)
 
-    # buses: collect flows per medium
+    # buses: collect flows per medium (FIXED: konsistente Namen!)
     el_in, el_out = [], []
     ht_out, ht_in = [], []
     gas_in, bio_in, waste_in = [], [], []
@@ -118,8 +114,7 @@ def build_model(df: pd.DataFrame, cfg: Dict[str,Any], dt_h: float = 1.0):
                              hourly_loss=0.9999, dt_h=dt_h, soc0=float(sto_cfg.get("soc0_mwh",0.0)))
         fs = block.attach(m, m.t, cfg, {})
         ht_out.append(fs["Q_th_out"]); ht_in.append(fs["Q_th_in"])
-        m.TES_SOC = Reference(fs["SOC"])      
-
+        m.TES_SOC = pyo.Reference(fs["SOC"])
 
     # Generators
     gens = syscfg.get("generators", {})
@@ -128,12 +123,15 @@ def build_model(df: pd.DataFrame, cfg: Dict[str,Any], dt_h: float = 1.0):
     for key, par in gens.items():
         if not par.get("enabled", False): continue
         gpar = cfg.get("generators",{}).get(key,{})
+        
+        # FIXED: P2H separate behandeln (war doppelt gezählt)
         if key == "p2h":
             block = P2HBlock("P2H", eff=float(gpar.get("el_to_th_eff",0.99)), cap_th_mw=float(par.get("cap_th_mw",10.0)))
             fs = block.attach(m, m.t, cfg, {})
             el_in.append(fs["P_el_in"]); ht_out.append(fs["Q_th_out"])
             continue
 
+        # Normale thermische Generatoren
         block = ThermalGeneratorBlock(key.upper(), th_eff=float(gpar.get("th_eff",0.9)),
                                       el_eff=gpar.get("el_eff", None), cap_th_mw=float(par.get("cap_th_mw",10.0)))
         fs = block.attach(m, m.t, cfg, {})
@@ -155,16 +153,15 @@ def build_model(df: pd.DataFrame, cfg: Dict[str,Any], dt_h: float = 1.0):
         fuel_cost_terms.append(sum(fs["fuel_in"][t]*price*dt_h for t in m.t))
         fuel_co2_terms.append(sum(fs["fuel_in"][t]*ef*dt_h for t in m.t))
 
-                # flows_* wurden hier gesammelt
-        if not flows_th_out:
-            raise RuntimeError(
-                "Kein thermischer Erzeuger an den Heat-Bus angeschlossen (flows_th_out leer). "
-                "Bitte System-Config prüfen (enabled/caps) und Attach-Implementierung sicherstellen."
-            )
+    # FIXED: Sanity Check mit korrektem Variablennamen
+    if not ht_out:
+        raise RuntimeError(
+            "Kein thermischer Erzeuger an den Heat-Bus angeschlossen (ht_out leer). "
+            "Bitte System-Config prüfen (enabled/caps) und Attach-Implementierung sicherstellen."
+        )
 
-        # zusätzliche Debug-Ausgaben:
-        print(f"[BUILD] #el_in={len(flows_el_in)}, #el_out={len(flows_el_out)}, #th_out={len(flows_th_out)}, #th_in={len(flows_th_in)}")
-
+    # Debug-Ausgaben
+    print(f"[BUILD] #el_in={len(el_in)}, #el_out={len(el_out)}, #ht_out={len(ht_out)}, #ht_in={len(ht_in)}")
 
     # --- Bus balances
     m.el_balance = pyo.Constraint(m.t, rule=lambda mm,t:
@@ -178,9 +175,9 @@ def build_model(df: pd.DataFrame, cfg: Dict[str,Any], dt_h: float = 1.0):
 
     # --- Objective
     if include_gridcost:
-        buy_price = (m.price[t] + m.energy_fee for t in m.t)
+        buy_price = [m.price[t] + m.energy_fee for t in m.t]
     else:
-        buy_price = (m.price[t] for t in m.t)
+        buy_price = [m.price[t] for t in m.t]
 
     energy_cost = sum(dt_h * (m.P_buy[t]*bp - m.P_sell[t]*m.price[t]) for t,bp in zip(m.t, buy_price))
     dump_cost   = m.dump_cost * sum(m.Q_dump[t]*dt_h for t in m.t)

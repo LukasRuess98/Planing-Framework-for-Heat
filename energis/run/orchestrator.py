@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Dict, Any, List, Optional
-import os, json, time, shutil
+import os, json, time
 import pandas as pd
 
 try:
@@ -20,6 +20,37 @@ def excel_safe(df: pd.DataFrame) -> pd.DataFrame:
         df2.index = df2.index.tz_convert("Europe/Berlin").tz_localize(None)
     return df2
 
+def _estimate_max_thermal_capacity(cfg: dict) -> float:
+    """Schätzt die maximale thermische Kapazität des Systems"""
+    syscfg = cfg.get("system", {})
+    cap = 0.0
+
+    # Heat pumps (Summe max_th_mw)
+    for hp in syscfg.get("heat_pumps", []):
+        if hp.get("enabled", True):
+            cap += float(hp.get("max_th_mw", 0.0))
+
+    # Storage liefert nicht dauerhaft Leistung → kein thermischer Kapazitätsbeitrag
+
+    # Generators (thermische caps) - FIXED: P2H wird hier nicht mehr doppelt gezählt
+    gens = syscfg.get("generators", {})
+    for key, par in gens.items():
+        if par.get("enabled", False):
+            cap += float(par.get("cap_th_mw", 0.0))
+
+    return cap
+
+def _assert_capacity_vs_demand(df: pd.DataFrame, cfg: dict, safety: float = 1.05):
+    """Prüft ob genug thermische Kapazität für Demand-Peak vorhanden ist"""
+    peak_demand = float(df["waermebedarf_MWth"].max())
+    cap = _estimate_max_thermal_capacity(cfg)
+    if cap < safety * peak_demand and peak_demand > 0:
+        raise RuntimeError(
+            f"Thermische Maximalleistung ({cap:.2f} MW_th) < {safety:.0%} des Demand-Peaks ({peak_demand:.2f} MW_th). "
+            "Aktiviere/erhöhe Kapazitäten (HP/generators) oder reduziere Demand – sonst kann das Modell entweder nicht "
+            "lösen oder produziert '0' bei Nullbedarf."
+        )
+
 def run_all(config_paths: List[str], overrides: Optional[Dict[str,Any]]=None) -> Dict[str,Any]:
     cfg = load_and_merge(config_paths)
     if overrides:
@@ -31,39 +62,8 @@ def run_all(config_paths: List[str], overrides: Optional[Dict[str,Any]]=None) ->
 
     df = load_input_excel(site.get("input_xlsx","Import_Data.xlsx"), site, dt_hours=dt_h)
 
-    def _estimate_max_thermal_capacity(cfg: dict) -> float:
-        syscfg = cfg.get("system", {})
-        cap = 0.0
-
-        # Heat pumps (Summe max_th_mw)
-        for hp in syscfg.get("heat_pumps", []):
-            if hp.get("enabled", True):
-                cap += float(hp.get("max_th_mw", 0.0))
-
-        # Storage liefert nicht dauerhaft Leistung → hier kein thermischer Kapazitätsbeitrag
-
-        # Generators (thermische caps)
-        gens = syscfg.get("generators", {})
-        for key, par in gens.items():
-            if par.get("enabled", False):
-                cap += float(par.get("cap_th_mw", 0.0))
-
-        # P2H (falls als Generator gelistet)
-        if "p2h" in gens and gens["p2h"].get("enabled", False):
-            cap += float(gens["p2h"].get("cap_th_mw", 0.0))
-
-        return cap
-
-    def _assert_capacity_vs_demand(df, cfg, safety=1.05):
-        peak_demand = float(df["waermebedarf_MWth"].max())
-        cap = _estimate_max_thermal_capacity(cfg)
-        if cap < safety * peak_demand and peak_demand > 0:
-            raise RuntimeError(
-                f"Thermische Maximalleistung ({cap:.2f} MW_th) < {safety:.0%} des Demand-Peaks ({peak_demand:.2f} MW_th). "
-                "Aktiviere/erhöhe Kapazitäten (HP/generators) oder reduziere Demand – sonst kann das Modell entweder nicht "
-                "lösen oder produziert ‘0’ bei Nullbedarf."
-            )
-
+    # OPTIONAL: Kapazitätsprüfung aktivieren (auskommentiert für Flexibilität)
+    # _assert_capacity_vs_demand(df, cfg, safety=1.05)
     
     m = build_model(df, cfg, dt_h=dt_h)
     if HAVE_PYOMO and m is not None:
