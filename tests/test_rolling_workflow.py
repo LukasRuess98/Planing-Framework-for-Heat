@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from datetime import datetime, timedelta
 import copy
+from typing import List
 
 import pytest
 
@@ -83,6 +84,7 @@ def test_pf_only_workflow(monkeypatch: pytest.MonkeyPatch, simple_config: dict) 
     assert result.pf_result is not None
     assert result.rh_result is None
     assert result.design is not None
+    assert result.plan.steps == ["PF"]
     assert result.design.heat_pumps["HP1"]["capacity_mw"] == pytest.approx(5.0)
     assert result.design.storage["capacity_mwh"] == pytest.approx(20.0)
 
@@ -124,6 +126,7 @@ def test_rh_only_workflow_aggregates(monkeypatch: pytest.MonkeyPatch, simple_con
 
     assert result.pf_result is None
     assert result.rh_result is not None
+    assert result.plan.steps == ["RH"]
     assert len(result.rh_result.windows) == 3
     assert result.rh_result.series["TES_SOC_MWh"] == [0.0, 1.0, 1.0, 2.0, 2.0]
     assert result.rh_result.series["P_buy_MW"] == [1.0, 1.0, 2.0, 2.0, 3.0]
@@ -200,6 +203,7 @@ def test_pf_then_rh_fix_design(monkeypatch: pytest.MonkeyPatch, simple_config: d
     assert result.pf_result is not None
     assert result.design is not None
     assert result.rh_result is not None
+    assert result.plan.steps == ["PF", "RH"]
     assert result.rh_result.series["TES_SOC_MWh"] == [0.0, 1.0, 1.0, 2.0, 2.0]
     assert result.design.heat_pumps["HP1"]["capacity_mw"] == pytest.approx(5.0)
     assert result.design.storage["power_mw"] == pytest.approx(5.0)
@@ -248,6 +252,7 @@ def test_custom_workflow_sequence(monkeypatch: pytest.MonkeyPatch, simple_config
 
     assert result.pf_result is not None
     assert result.rh_result is not None
+    assert result.plan.steps == ["PF", "RH"]
 
 
 def test_workflow_accepts_string(monkeypatch: pytest.MonkeyPatch, simple_config: dict) -> None:
@@ -266,6 +271,7 @@ def test_workflow_accepts_string(monkeypatch: pytest.MonkeyPatch, simple_config:
 
     result = rh.run_workflow([], overrides=config)
     assert result.pf_result is not None
+    assert result.plan.steps == ["PF"]
 
 
 def test_unknown_workflow_step(monkeypatch: pytest.MonkeyPatch, simple_config: dict) -> None:
@@ -284,4 +290,58 @@ def test_unknown_workflow_step(monkeypatch: pytest.MonkeyPatch, simple_config: d
 
     with pytest.raises(ValueError):
         rh.run_workflow([], overrides=config)
+
+
+def test_custom_workflow_registration(monkeypatch: pytest.MonkeyPatch, simple_config: dict) -> None:
+    config = copy.deepcopy(simple_config)
+    config["scenario"] = {"workflow": ["CUSTOM"]}
+
+    table = _make_table(2)
+    monkeypatch.setattr(rh, "load_input_excel", lambda *args, **kwargs: table)
+
+    def fake_merge(paths):
+        return copy.deepcopy(config)
+
+    monkeypatch.setattr(rh, "load_and_merge", fake_merge)
+
+    executed: List[str] = []
+
+    def custom_step(context: rh.WorkflowContext) -> None:
+        executed.append("X")
+        context.pf_result = rh.ScenarioResult(context.table, OrderedDict(), {}, {}, {})
+
+    rh.register_workflow_step("CUSTOM", custom_step)
+    try:
+        result = rh.run_workflow(["dummy.yaml"])
+    finally:
+        rh.unregister_workflow_step("CUSTOM")
+
+    assert executed == ["X"]
+    assert result.plan.steps == ["CUSTOM"]
+    assert result.pf_result is not None
+
+
+def test_cli_entrypoint(monkeypatch: pytest.MonkeyPatch, simple_config: dict, capsys: pytest.CaptureFixture[str]) -> None:
+    config = copy.deepcopy(simple_config)
+    config["scenario"] = {"workflow": ["PF"]}
+
+    table = _make_table(2)
+
+    def fake_merge(paths):
+        return copy.deepcopy(config)
+
+    def fake_solve(table_arg, cfg, dt_h, solver_name):
+        series = OrderedDict({"TES_SOC_MWh": [0.0] * len(table_arg)})
+        summary = OrderedDict({"objective": OrderedDict()})
+        return rh.ScenarioResult(table_arg, series, summary, {"objective.OBJ_value_EUR": 0.0}, {})
+
+    monkeypatch.setattr(rh, "load_and_merge", fake_merge)
+    monkeypatch.setattr(rh, "load_input_excel", lambda *args, **kwargs: table)
+    monkeypatch.setattr(rh, "_solve_scenario", fake_solve)
+
+    exit_code = rh.main(["configs.yaml", "--print-design"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "[workflow] Executed steps" in captured.out
 

@@ -13,9 +13,10 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
+import argparse
 import copy
 import math
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
 
 try:  # pragma: no cover - optional dependency
     import pyomo.environ as pyo
@@ -69,18 +70,8 @@ class DesignData:
 
 
 @dataclass
-class WorkflowResult:
-    """Return value for :func:`run_workflow`."""
-
-    config: Dict[str, Any]
-    pf_result: Optional[ScenarioResult]
-    rh_result: Optional[RollingHorizonResult]
-    design: Optional[DesignData]
-
-
-@dataclass
-class _WorkflowPlan:
-    """Internal representation of the requested workflow."""
+class WorkflowPlan:
+    """Parsed representation of the requested workflow sequence."""
 
     steps: Sequence[str]
     fix_design: bool
@@ -104,6 +95,69 @@ class _RollingParams:
         if step_steps > horizon_steps:
             raise ValueError("STEP_HOURS must not exceed HEAT_HORIZON_HOURS")
         return horizon_steps, step_steps
+
+
+@dataclass
+class WorkflowContext:
+    """Mutable state shared between workflow steps."""
+
+    cfg: Dict[str, Any]
+    table: TimeSeriesTable
+    dt_h: float
+    solver_name: str
+    plan: WorkflowPlan
+    pf_result: Optional[ScenarioResult] = None
+    rh_result: Optional[RollingHorizonResult] = None
+    design: Optional[DesignData] = None
+
+
+StepHandler = Callable[[WorkflowContext], None]
+
+
+_STEP_HANDLERS: Dict[str, StepHandler] = {}
+
+
+def register_workflow_step(name: str, handler: StepHandler) -> None:
+    """Register or replace a workflow step handler.
+
+    Parameters
+    ----------
+    name:
+        Identifier used in ``scenario.workflow`` entries.  The identifier is
+        stored in upper-case to provide case-insensitive matching.
+    handler:
+        Callable that mutates a :class:`WorkflowContext` in place.
+    """
+
+    key = str(name).strip().upper()
+    if not key:
+        raise ValueError("Workflow step name must not be empty")
+    _STEP_HANDLERS[key] = handler
+
+
+def unregister_workflow_step(name: str) -> None:
+    """Remove a workflow step handler if it exists."""
+
+    key = str(name).strip().upper()
+    if key:
+        _STEP_HANDLERS.pop(key, None)
+
+
+def get_registered_workflow_steps() -> List[str]:
+    """Return the currently registered workflow step identifiers."""
+
+    return sorted(_STEP_HANDLERS.keys())
+
+
+@dataclass
+class WorkflowResult:
+    """Return value for :func:`run_workflow`."""
+
+    config: Dict[str, Any]
+    pf_result: Optional[ScenarioResult]
+    rh_result: Optional[RollingHorizonResult]
+    design: Optional[DesignData]
+    plan: WorkflowPlan
 
 
 def run_workflow(config_paths: List[str], overrides: Optional[Dict[str, Any]] = None) -> WorkflowResult:
@@ -134,36 +188,18 @@ def run_workflow(config_paths: List[str], overrides: Optional[Dict[str, Any]] = 
     plan = _parse_workflow_plan(scenario_cfg)
     solver_name = str(run_cfg.get("solver", "glpk"))
 
-    pf_result: Optional[ScenarioResult] = None
-    rh_result: Optional[RollingHorizonResult] = None
-    design: Optional[DesignData] = None
+    context = WorkflowContext(cfg, table, dt_h, solver_name, plan)
 
     for step in plan.steps:
-        if step == "PF":
-            pf_result = _solve_scenario(table, cfg, dt_h, solver_name)
-            design = _extract_design_data(pf_result.summary)
-        elif step == "RH":
-            params = _load_rolling_params(cfg)
-            horizon_steps, step_steps = params.as_steps(dt_h)
-            fix_design = plan.fix_design and design is not None
-            rh_result = _run_rolling_horizon(
-                cfg,
-                table,
-                dt_h,
-                solver_name,
-                params,
-                horizon_steps,
-                step_steps,
-                design,
-                fix_design,
-            )
-        else:
+        handler = _STEP_HANDLERS.get(step)
+        if handler is None:
             raise ValueError(f"Unsupported workflow step: {step}")
+        handler(context)
 
-    return WorkflowResult(cfg, pf_result, rh_result, design)
+    return WorkflowResult(cfg, context.pf_result, context.rh_result, context.design, plan)
 
 
-def _parse_workflow_plan(scenario_cfg: Mapping[str, Any]) -> _WorkflowPlan:
+def _parse_workflow_plan(scenario_cfg: Mapping[str, Any]) -> WorkflowPlan:
     run_mode = str(scenario_cfg.get("run_mode", "")).strip().upper() or "PF_ONLY"
     workflow = scenario_cfg.get("workflow")
 
@@ -188,7 +224,30 @@ def _parse_workflow_plan(scenario_cfg: Mapping[str, Any]) -> _WorkflowPlan:
     fix_default = run_mode in {"PF_THEN_RH", "PF_AND_RH"}
     fix_design = bool(scenario_cfg.get("fix_design", scenario_cfg.get("fix_design_in_rh", fix_default)))
 
-    return _WorkflowPlan(steps=steps_upper, fix_design=fix_design)
+    return WorkflowPlan(steps=steps_upper, fix_design=fix_design)
+
+
+def _pf_step(context: WorkflowContext) -> None:
+    result = _solve_scenario(context.table, context.cfg, context.dt_h, context.solver_name)
+    context.pf_result = result
+    context.design = _extract_design_data(result.summary)
+
+
+def _rh_step(context: WorkflowContext) -> None:
+    params = _load_rolling_params(context.cfg)
+    horizon_steps, step_steps = params.as_steps(context.dt_h)
+    fix_design = context.plan.fix_design and context.design is not None
+    context.rh_result = _run_rolling_horizon(
+        context.cfg,
+        context.table,
+        context.dt_h,
+        context.solver_name,
+        params,
+        horizon_steps,
+        step_steps,
+        context.design,
+        fix_design,
+    )
 
 
 def _run_rolling_horizon(
@@ -465,6 +524,54 @@ def _apply_design_fix(cfg: Dict[str, Any], design: DesignData) -> Dict[str, Any]
     return cfg_copy
 
 
+def _register_default_steps() -> None:
+    register_workflow_step("PF", _pf_step)
+    register_workflow_step("RH", _rh_step)
+
+
+_register_default_steps()
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Simple command line interface for :mod:`energis.run.rolling_horizon`."""
+
+    parser = argparse.ArgumentParser(description="Run PF/RH workflows using merged EnerGIS configs")
+    parser.add_argument(
+        "configs",
+        metavar="CONFIG",
+        nargs="+",
+        help="Configuration files passed to load_and_merge in the given order",
+    )
+    parser.add_argument(
+        "--print-design",
+        action="store_true",
+        help="Print extracted design values when available",
+    )
+    args = parser.parse_args(argv)
+
+    result = run_workflow(args.configs)
+    steps = " -> ".join(result.plan.steps)
+    print(f"[workflow] Executed steps: {steps}")
+
+    if result.pf_result is not None:
+        pf_obj = result.pf_result.costs.get("objective.OBJ_value_EUR") if result.pf_result.costs else None
+        print(f"  • PF time steps: {len(result.pf_result.table)}")
+        if pf_obj is not None:
+            print(f"  • PF objective: {pf_obj}")
+
+    if result.rh_result is not None:
+        print(f"  • RH windows: {len(result.rh_result.windows)}")
+        print(f"  • RH committed steps: {len(result.rh_result.table)}")
+
+    if args.print_design and result.design is not None:
+        hp_parts = ", ".join(sorted(result.design.heat_pumps.keys())) or "none"
+        print(f"  • Design heat pumps: {hp_parts}")
+        if result.design.storage is not None:
+            print(f"  • Storage design: {result.design.storage}")
+
+    return 0
+
+
 __all__ = [
     "ScenarioResult",
     "WindowResult",
@@ -472,5 +579,15 @@ __all__ = [
     "DesignData",
     "WorkflowResult",
     "run_workflow",
+    "WorkflowContext",
+    "WorkflowPlan",
+    "register_workflow_step",
+    "unregister_workflow_step",
+    "get_registered_workflow_steps",
+    "main",
 ]
+
+
+if __name__ == "__main__":  # pragma: no cover - manual execution helper
+    raise SystemExit(main())
 
