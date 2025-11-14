@@ -11,6 +11,7 @@ except Exception:  # pragma: no cover - optional dependency
     HAVE_PYOMO = False
 
 from energis.models.system_builder import build_model
+from energis.run.orchestrator import _collect_timeseries_and_summary
 from energis.utils.timeseries import TimeSeriesTable
 
 
@@ -88,6 +89,18 @@ def test_heat_pump_investment_costs():
     tie = 1.0 * 4.0
     assert pyo.value(model.obj.expr) == pytest.approx(capex + activation + tie)
 
+    series, summary, flat = _collect_timeseries_and_summary(table, cfg, 1.0, model)
+    objective = summary["objective"]
+    assert objective["Capex_cost_EUR"] == pytest.approx(capex)
+    assert objective["Activation_cost_EUR"] == pytest.approx(activation)
+    assert objective["Tie_breaker_cost_EUR"] == pytest.approx(tie)
+    assert objective["Objective_residual_EUR"] == pytest.approx(0.0)
+    hp_section = summary["heat_pump_HP_INV"]
+    assert hp_section["Thermal_capacity_MW"] == pytest.approx(4.0)
+    assert hp_section["Build_binary"] == pytest.approx(1.0)
+    assert hp_section["Investment_enabled"] is True
+    assert flat["objective.Capex_cost_EUR"] == pytest.approx(capex)
+
 
 @pytest.mark.skipif(not HAVE_PYOMO, reason="Pyomo not available")
 def test_storage_terminal_policy_and_costs():
@@ -152,3 +165,17 @@ def test_storage_terminal_policy_and_costs():
     activation = 50.0 * (period_frac / 5.0)
     tie = 0.5 * 5.0
     assert pyo.value(model.obj.expr) == pytest.approx(capex + activation + tie)
+
+    series, summary, flat = _collect_timeseries_and_summary(table, cfg, 1.0, model)
+    objective = summary["objective"]
+    assert objective["Capex_cost_EUR"] == pytest.approx(capex)
+    assert objective["Activation_cost_EUR"] == pytest.approx(activation)
+    assert objective["Tie_breaker_cost_EUR"] == pytest.approx(tie)
+    assert objective["Objective_residual_EUR"] == pytest.approx(0.0)
+
+    storage_section = summary["storage_TES"]
+    assert storage_section["Capacity_MWh"] == pytest.approx(5.0)
+    assert storage_section["Power_limit_MW"] == pytest.approx(3.0)
+    assert storage_section["Build_binary"] == pytest.approx(1.0)
+    assert storage_section["Investment_enabled"] is True
+    assert flat["objective.Tie_breaker_cost_EUR"] == pytest.approx(tie)

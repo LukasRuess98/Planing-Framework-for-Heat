@@ -329,6 +329,10 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
     activation_total = sum(activation_terms) if activation_terms else 0
     tie_break_total = sum(tie_breaker_terms) if tie_breaker_terms else 0
 
+    m.capex_cost_expr = capex_total
+    m.activation_cost_expr = activation_total
+    m.tie_break_cost_expr = tie_break_total
+
     m.obj = pyo.Objective(
         expr=energy_cost + dump_cost + fuel_costs + co2_term + demand_term + capex_total + activation_total + tie_break_total,
         sense=pyo.minimize,
