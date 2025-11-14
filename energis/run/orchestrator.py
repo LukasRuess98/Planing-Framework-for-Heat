@@ -23,6 +23,26 @@ from energis.models.system_builder import build_model
 from energis.utils.timeseries import TimeSeriesTable
 
 
+def _json_safe(value: Any) -> Any:
+    """Return a JSON-serialisable representation of ``value``.
+
+    The solver meta data pulled from Pyomo occasionally contains sentinel
+    objects such as ``UndefinedData`` which the standard :mod:`json` module
+    cannot serialise.  We normalise those values (and other non-primitive
+    objects) so that exporting results to JSON never fails.
+    """
+
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, Mapping):
+        return {key: _json_safe(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(val) for val in value]
+    if HAVE_PYOMO and value.__class__.__name__ == "UndefinedData":  # pragma: no cover - depends on Pyomo
+        return None
+    return str(value)
+
+
 def _estimate_max_thermal_capacity(cfg: dict) -> float:
     syscfg = cfg.get("system", {})
     cap = 0.0
@@ -587,11 +607,11 @@ def run_all(config_paths: List[str], overrides: Optional[Dict[str, Any]] = None)
         print(f"[EXPORT] Excel-Export übersprungen: {exc}")
         xlsx_file = None
 
-    summary_json = {section: dict(metrics) for section, metrics in summary_sections.items()}
-    metadata_json = {section: dict(entries) for section, entries in metadata_sections.items()}
+    summary_json = _json_safe({section: dict(metrics) for section, metrics in summary_sections.items()})
+    metadata_json = _json_safe({section: dict(entries) for section, entries in metadata_sections.items()})
 
     with open(os.path.join(outdir, "costs.json"), "w", encoding="utf-8") as handle:
-        json.dump(costs, handle, indent=2)
+        json.dump(_json_safe(costs), handle, indent=2)
 
     with open(os.path.join(outdir, "summary.json"), "w", encoding="utf-8") as handle:
         json.dump(summary_json, handle, indent=2)
@@ -600,7 +620,7 @@ def run_all(config_paths: List[str], overrides: Optional[Dict[str, Any]] = None)
         json.dump(metadata_json, handle, indent=2)
 
     with open(os.path.join(outdir, "merged_config.json"), "w", encoding="utf-8") as handle:
-        json.dump(cfg, handle, indent=2)
+        json.dump(_json_safe(cfg), handle, indent=2)
 
     return {
         "scenario_csv": scen_file,
