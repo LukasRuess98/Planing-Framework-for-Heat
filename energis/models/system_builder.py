@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import math
 
 try:
@@ -63,6 +63,7 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
     T = len(table)
     m = pyo.ConcreteModel(name="EnerGIS_FuelBus")
     m.t = pyo.RangeSet(1, T)
+    period_frac = float(T * dt_h / 8760.0)
 
     def series_dict(name: str) -> Dict[int, float]:
         values = table[name]
@@ -105,6 +106,13 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
 
     syscfg = cfg.get("system", {})
 
+    hp_defaults = cfg.get("heat_pumps", {})
+    hp_inv_defaults = hp_defaults.get("investment_defaults", {})
+
+    capex_terms: List = []
+    activation_terms: List = []
+    tie_breaker_terms: List = []
+
     for hp in syscfg.get("heat_pumps", []):
         if not hp.get("enabled", True):
             continue
@@ -116,15 +124,87 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
             if wrg_col not in table.columns and f"{wrg_col}_K" in table.columns:
                 wrg_col = f"{wrg_col}_K"
         COP_series = _cop_series_from_table(table, wrg_col, cfg, hp_type)
-        type_par = cfg.get("heat_pumps", {}).get("types", {}).get(hp_type, {})
-        min_load = float(type_par.get("min_load", 0.3))
-        block = HeatPumpBlock(name, max_th_mw=float(hp.get("max_th_mw", 100.0)), min_load=min_load, COP_series=COP_series)
+        wrg_cap_col: Optional[str] = hp.get("wrg_capacity_column")
+        if wrg_cap_col is None and hp.get("wrg_source_column"):
+            prefix = str(hp.get("wrg_source_column")).split("_T")[0]
+            candidate = f"{prefix}_Q_cap"
+            if candidate in table.columns:
+                wrg_cap_col = candidate
+        wrg_caps = None
+        if wrg_cap_col and wrg_cap_col in table.columns:
+            wrg_caps = {i + 1: float(table[wrg_cap_col][i]) for i in range(T)}
+
+        inv_cfg = dict(hp_inv_defaults)
+        inv_cfg.update(hp.get("investment", {}))
+        invest_enabled = bool(inv_cfg.get("enabled", False))
+        cap_min = float(inv_cfg.get("capacity_min_mw", hp.get("min_th_mw", 0.0)))
+        cap_max = float(inv_cfg.get("capacity_max_mw", hp.get("max_th_mw", 0.0)))
+        existing_cap = float(hp.get("max_th_mw", cap_max))
+        cap_init = float(
+            inv_cfg.get(
+                "initial_capacity_mw",
+                existing_cap if not invest_enabled else max(cap_min, min(existing_cap, cap_max)),
+            )
+        )
+        min_load = float(cfg.get("heat_pumps", {}).get("types", {}).get(hp_type, {}).get("min_load", 0.3))
+
+        block = HeatPumpBlock(
+            name,
+            min_load=min_load,
+            cop_series=COP_series,
+            capacity_min_mw=cap_min,
+            capacity_max_mw=cap_max,
+            capacity_init_mw=cap_init,
+            investable=invest_enabled,
+            wrg_cap_series=wrg_caps,
+        )
         fs = block.attach(m, m.t, cfg, {})
         ht_out.append(fs["Q_th_out"])
         el_in.append(fs["P_el_in"])
 
+        cap_var = fs.get("capacity")
+        build_var = fs.get("build")
+        if cap_var is not None and build_var is not None:
+            lifetime = float(inv_cfg.get("lifetime_years", hp_inv_defaults.get("lifetime_years", 20.0)))
+            capex = float(inv_cfg.get("capex_eur_per_mw", hp_inv_defaults.get("capex_eur_per_mw", 0.0)))
+            activation = float(inv_cfg.get("activation_cost_eur", hp_inv_defaults.get("activation_cost_eur", 0.0)))
+            tie_breaker = float(inv_cfg.get("tie_breaker_eur_per_mw", hp_inv_defaults.get("tie_breaker_eur_per_mw", 0.0)))
+            if lifetime > 0:
+                annual_factor = period_frac / lifetime
+            else:
+                annual_factor = 0.0
+            capex_terms.append(cap_var * capex * annual_factor)
+            activation_terms.append(build_var * activation * annual_factor)
+            if tie_breaker:
+                tie_breaker_terms.append(cap_var * tie_breaker)
+
     sto_cfg = syscfg.get("storage", {"enabled": False})
     if sto_cfg.get("enabled", False):
+        sto_defaults = cfg.get("storage", {}).get("investment_defaults", {})
+        sto_inv = dict(sto_defaults)
+        sto_inv.update(sto_cfg.get("investment", {}))
+        invest_enabled = bool(sto_inv.get("enabled", False))
+        e_cap_min = float(sto_inv.get("energy_capacity_min_mwh", sto_cfg.get("min_energy_mwh", 0.0)))
+        e_cap_max = float(sto_inv.get("energy_capacity_max_mwh", sto_cfg.get("max_energy_mwh", 50000.0)))
+        p_cap_min = float(sto_inv.get("power_capacity_min_mw", sto_cfg.get("min_power_mw", 0.0)))
+        p_cap_max = float(sto_inv.get("power_capacity_max_mw", sto_cfg.get("max_power_mw", 50.0)))
+        e_cap_init = float(
+            sto_inv.get(
+                "initial_energy_capacity_mwh",
+                sto_cfg.get("max_energy_mwh", e_cap_max) if not invest_enabled else max(e_cap_min, min(e_cap_max, sto_cfg.get("max_energy_mwh", e_cap_max))),
+            )
+        )
+        p_cap_init = float(
+            sto_inv.get(
+                "initial_power_capacity_mw",
+                sto_cfg.get("max_power_mw", p_cap_max) if not invest_enabled else max(p_cap_min, min(p_cap_max, sto_cfg.get("max_power_mw", p_cap_max))),
+            )
+        )
+        terminal_target = sto_cfg.get("terminal_soc_mwh")
+        if terminal_target is None:
+            horizon_cfg = cfg.get("scenario", {}).get("horizon", {})
+            if not bool(horizon_cfg.get("enforce", True)):
+                terminal_target = float(sto_cfg.get("soc0_mwh", 0.0))
         block = StorageBlock(
             "TES",
             e_min=sto_cfg.get("min_energy_mwh", 0.0),
@@ -135,11 +215,39 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
             hourly_loss=0.9999,
             dt_h=dt_h,
             soc0=float(sto_cfg.get("soc0_mwh", 0.0)),
+            investable=invest_enabled,
+            e_cap_min=e_cap_min,
+            e_cap_max=e_cap_max,
+            p_cap_min=p_cap_min,
+            p_cap_max=p_cap_max,
+            e_cap_init=e_cap_init,
+            p_cap_init=p_cap_init,
+            terminal_target=terminal_target,
         )
         fs = block.attach(m, m.t, cfg, {})
         ht_out.append(fs["Q_th_out"])
         ht_in.append(fs["Q_th_in"])
         m.TES_SOC = pyo.Reference(fs["SOC"])
+        cap_var = fs.get("cap_energy")
+        pow_var = fs.get("cap_power")
+        build_var = fs.get("build")
+        lifetime = float(sto_inv.get("lifetime_years", sto_defaults.get("lifetime_years", 20.0)))
+        e_capex = float(sto_inv.get("energy_capex_eur_per_mwh", sto_defaults.get("energy_capex_eur_per_mwh", 0.0)))
+        p_capex = float(sto_inv.get("power_capex_eur_per_mw", sto_defaults.get("power_capex_eur_per_mw", 0.0)))
+        activation = float(sto_inv.get("activation_cost_eur", sto_defaults.get("activation_cost_eur", 0.0)))
+        tie_breaker = float(sto_inv.get("tie_breaker_eur_per_mwh", sto_defaults.get("tie_breaker_eur_per_mwh", 0.0)))
+        if lifetime > 0:
+            annual_factor = period_frac / lifetime
+        else:
+            annual_factor = 0.0
+        if cap_var is not None:
+            capex_terms.append(cap_var * e_capex * annual_factor)
+            if tie_breaker:
+                tie_breaker_terms.append(cap_var * tie_breaker)
+        if pow_var is not None:
+            capex_terms.append(pow_var * p_capex * annual_factor)
+        if build_var is not None:
+            activation_terms.append(build_var * activation * annual_factor)
 
     gens = syscfg.get("generators", {})
     fuel_cost_terms: List = []
@@ -213,11 +321,17 @@ def build_model(table: TimeSeriesTable, cfg: Dict[str, Any], dt_h: float = 1.0):
     co2_fuel = sum(fuel_co2_terms) if fuel_co2_terms else 0
     co2_term = (m.co2_price / 1000.0) * (co2_grid + co2_fuel) if include_co2 else 0
 
-    period_frac = float(T * dt_h / 8760.0)
     m.P_buy_peak = pyo.Var(domain=pyo.NonNegativeReals)
     m.peak_con = pyo.Constraint(m.t, rule=lambda mm, t: mm.P_buy_peak >= mm.P_buy[t])
     demand_term = (m.demand_charge_y * period_frac * m.P_buy_peak) if include_demand else 0
 
-    m.obj = pyo.Objective(expr=energy_cost + dump_cost + fuel_costs + co2_term + demand_term, sense=pyo.minimize)
+    capex_total = sum(capex_terms) if capex_terms else 0
+    activation_total = sum(activation_terms) if activation_terms else 0
+    tie_break_total = sum(tie_breaker_terms) if tie_breaker_terms else 0
+
+    m.obj = pyo.Objective(
+        expr=energy_cost + dump_cost + fuel_costs + co2_term + demand_term + capex_total + activation_total + tie_break_total,
+        sense=pyo.minimize,
+    )
     return m
 
