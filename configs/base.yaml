@@ -12,3 +12,11 @@ costs:
 grid:
   energy_fee_eur_mwh: 0.0
   demand_charge_eur_per_mw_y: 120000.0
+  gridcost_eur_mwh: 0.0
+  sell_floor_eur_mwh: 0.0
+  sell_haircut_fraction: 0.0
+  sell_spread_eur_mwh: 0.0
+  sell_fee_eur_mwh: 0.0
+  sell_premium_eur_mwh: 0.0
+  year_fraction: 1.0
+  big_m_grid_mw: 10000.0
