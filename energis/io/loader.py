@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import re
 from pathlib import Path
@@ -11,6 +12,16 @@ from energis.utils.timeseries import TimeSeriesTable, fill_gaps
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _is_empty(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float) and math.isnan(value):
+        return True
+    if isinstance(value, str) and value.strip() == "":
+        return True
+    return False
 
 
 def _require(cond: bool, msg: str) -> None:
@@ -113,6 +124,8 @@ def _map_column(header: List[str], candidates: List[str]) -> Optional[str]:
 def _build_records(header: List[str], rows: List[List[Any]]) -> List[Dict[str, Any]]:
     records = []
     for row in rows:
+        if all(_is_empty(value) for value in row):
+            continue
         record = {}
         for col, value in zip(header, row):
             record[col] = value
@@ -137,6 +150,8 @@ def load_input_excel(
     records = _build_records(header, rows)
 
     time_col = _find_time_column(header)
+    records = [rec for rec in records if not _is_empty(rec.get(time_col))]
+    _require(records, f"Zeitspalte '{time_col}' enthält keine gültigen Werte.")
     timestamps = [_parse_datetime(rec[time_col]) for rec in records]
 
     year_target = site_cfg.get("year_target")
