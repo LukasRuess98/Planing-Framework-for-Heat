@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from zipfile import ZipFile
+import json
 
 import pytest
 
 from energis.io import exporter
 from energis.io.exporter import write_timeseries_csv
 from energis.utils.timeseries import TimeSeriesTable
+from energis.run import orchestrator
 
 
 def _build_table() -> TimeSeriesTable:
@@ -94,4 +98,68 @@ def test_extract_pyomo_series_handles_invalid_data(monkeypatch, caplog) -> None:
 
     assert result == [1.0, 0.0, 0.0, 0.0]
     assert "dummy[1]" in caplog.text
+
+
+def test_run_all_creates_export_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    config = {
+        "site": {"input_xlsx": "dummy.xlsx"},
+        "run": {"dt_h": 1.0, "solver": "dummy"},
+        "scenario": {"title": "Demo", "mode": "PF"},
+        "system": {
+            "heat_pumps": [
+                {"id": "HP1", "max_th_mw": 20.0, "min_th_mw": 1.0, "investment": {}},
+            ],
+        },
+    }
+
+    table = TimeSeriesTable(
+        index=[datetime(2024, 1, 1), datetime(2024, 1, 1, 1)],
+        columns=["waermebedarf_MWth"],
+        data={"waermebedarf_MWth": [5.0, 6.0]},
+    )
+
+    series = OrderedDict({"P_buy_MW": [0.0, 0.0]})
+    summary = OrderedDict(
+        {
+            "objective": OrderedDict({"OBJ_value_EUR": 1.0}),
+            "heat_pump_HP1": OrderedDict(
+                {
+                    "Thermal_capacity_MW": 5.0,
+                    "Build_binary": 1.0,
+                }
+            ),
+        }
+    )
+    costs = {"objective.OBJ_value_EUR": 1.0}
+
+    monkeypatch.setattr(orchestrator, "load_and_merge", lambda *_args: config)
+    monkeypatch.setattr(orchestrator, "load_input_excel", lambda *args, **kwargs: table)
+    monkeypatch.setattr(orchestrator, "build_model", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "_collect_timeseries_and_summary",
+        lambda *args, **kwargs: (series, summary, costs),
+    )
+    monkeypatch.setattr(orchestrator, "export_plots", lambda *args, **kwargs: [])
+
+    result = orchestrator.run_all([])
+
+    assert result["scenario_xlsx"] is not None
+    xlsx_path = Path(result["scenario_xlsx"])
+    assert xlsx_path.exists()
+
+    manifest_path = Path(result["manifest_json"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["scenario_title"] == "Demo"
+    assert manifest["flags"]["has_design"] is True
+
+    design_path = Path(result["pf_design_json"])
+    design = json.loads(design_path.read_text(encoding="utf-8"))
+    assert design["heat_pumps"]["HP1"]["capacity_mw"] == pytest.approx(5.0)
+
+    with ZipFile(xlsx_path, "r") as archive:
+        workbook_xml = archive.read("xl/workbook.xml").decode("utf-8")
+    assert "Timeseries" in workbook_xml
 
